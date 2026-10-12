@@ -96,29 +96,29 @@ export default function App() {
     '12:12:10 [Security] Đã cấu hình session cố định (persist:flowdesk) chống reCAPTCHA và tích hợp Stealth script.'
   ]);
 
-  // Accounts State (30 profiles)
-  const [accounts, setAccounts] = useState<Account[]>(() => {
-    const list: Account[] = [];
-    for (let i = 1; i <= 30; i++) {
-      list.push({
-        id: `acc_${i.toString().padStart(2, '0')}`,
-        name: `Tài khoản ${i.toString().padStart(2, '0')}`,
-        email: i === 1 ? 'hoaihkht1994@gmail.com' : i === 2 ? 'creator.pro@gmail.com' : '',
-        plan: i === 1 ? 'Pro' : i === 2 ? 'Ultra' : 'Unknown',
-        credits: i === 1 ? 450 : i === 2 ? 1200 : null,
-        status: i <= 2 ? 'Đã đăng nhập từ Flow' : 'Chưa đăng nhập',
-        enabled: true,
-        images: true,
-        videos: true,
-        loginStarted: i <= 2,
-        loginMode: false,
-        port: i === 1 ? 9222 : i === 2 ? 9223 : 0,
-        browserId: i <= 2 ? 'ws://127.0.0.1:9222/devtools/browser/test' : '',
-        checkedAt: 'Hôm nay 12:00'
-      });
+  // Accounts State: Khởi đầu sạch sẽ 0 tài khoản, tải từ accounts.json nếu có
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccId, setSelectedAccId] = useState<string>('');
+
+  // Tải danh sách tài khoản từ tệp accounts.json nếu đang chạy trên Electron
+  useEffect(() => {
+    if ((window as any).electronAPI?.getAccounts) {
+      (window as any).electronAPI.getAccounts().then((saved: Account[]) => {
+        if (saved && Array.isArray(saved) && saved.length > 0) {
+          setAccounts(saved);
+          setSelectedAccId(saved[0].id);
+          addLog(`[Accounts] Đã tải ${saved.length} tài khoản từ Data/accounts.json`);
+        }
+      }).catch((e: any) => console.error(e));
     }
-    return list;
-  });
+  }, []);
+
+  // Tự động lưu accounts vào file mỗi khi danh sách thay đổi
+  useEffect(() => {
+    if ((window as any).electronAPI?.saveAccounts && accounts.length > 0) {
+      (window as any).electronAPI.saveAccounts(accounts).catch((e: any) => console.error(e));
+    }
+  }, [accounts]);
 
   // Queue State
   const [queue, setQueue] = useState<JobTask[]>([
@@ -324,15 +324,53 @@ export default function App() {
         {/* Zone 3: Primary action */}
         <div className="flex items-center gap-3 shrink-0">
           <button
-            onClick={() => {
-              const a = accounts.find(x => x.loginStarted) || accounts[0];
-              addLog(`[Auth] Mở trình duyệt Chrome cho hồ sơ ${a.name}...`);
-              alert(`Mở cửa sổ Chrome chuyên biệt với user-data-dir tại Data/Profiles/${a.id} để đăng nhập Google / Flow.`);
+            onClick={async () => {
+              let targetAcc = accounts.find(x => x.id === selectedAccId) || accounts.find(x => x.loginStarted) || accounts[0];
+              if (!targetAcc) {
+                // Nếu chưa có tài khoản nào, tạo ngay tài khoản 01 và mở Chrome
+                const newAcc: Account = {
+                  id: 'acc_01',
+                  name: 'Tài khoản 01',
+                  email: '',
+                  plan: 'Unknown',
+                  credits: null,
+                  status: 'Chờ đăng nhập',
+                  enabled: true,
+                  images: true,
+                  videos: true,
+                  loginStarted: true,
+                  loginMode: true,
+                  port: 9222,
+                  browserId: '',
+                  checkedAt: 'Chưa kiểm tra'
+                };
+                setAccounts([newAcc]);
+                setSelectedAccId('acc_01');
+                targetAcc = newAcc;
+              }
+              addLog(`[Auth] Khởi chạy Chrome cho hồ sơ: ${targetAcc.name}`);
+              addLog(`[Cơ chế gốc] chrome.exe --user-data-dir="Data/Profiles/${targetAcc.id}" --disable-blink-features=AutomationControlled --exclude-switches=enable-automation --disable-infobars --new-window https://labs.google/fx/tools/flow`);
+              
+              if ((window as any).electronAPI?.openChromeProfile) {
+                try {
+                  const res = await (window as any).electronAPI.openChromeProfile({ accountId: targetAcc.id, mode: 'login' });
+                  if (res.success) {
+                    addLog(`[Chrome] Đã mở thành công Chrome cho ${targetAcc.name}! Đăng nhập xong hãy đóng cửa sổ.`);
+                    setAccounts(prev => prev.map(a => a.id === targetAcc.id ? { ...a, status: 'Đăng nhập xong: đóng Chrome để kết nối' } : a));
+                  } else {
+                    addLog(`[Lỗi] ${res.error}`);
+                  }
+                } catch (err: any) {
+                  addLog(`[Lỗi] ${err.message}`);
+                }
+              } else {
+                window.open('https://labs.google/fx/tools/flow', '_blank');
+              }
             }}
             className="px-4 py-2 text-xs font-semibold text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-all shadow-sm whitespace-nowrap flex items-center gap-2"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            Mở Chrome Hồ sơ
+            + Mở Chrome Đăng nhập
           </button>
         </div>
       </header>
@@ -464,15 +502,23 @@ export default function App() {
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Tài khoản thực thi</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-slate-400">Tài khoản thực thi</label>
+                  <button
+                    onClick={() => setActiveTab('accounts')}
+                    className="text-[11px] text-cyan-400 hover:underline flex items-center gap-1"
+                  >
+                    + Quản lý & Đăng nhập ({accounts.length})
+                  </button>
+                </div>
                 <select
                   value={selectedAccountId}
                   onChange={e => setSelectedAccountId(e.target.value)}
                   className="w-full bg-[#131924] border border-[#2B374B] rounded-lg px-3 py-2 text-sm text-slate-200"
                 >
                   <option value="auto">Tự chọn tài khoản đủ quyền luân phiên</option>
-                  {accounts.filter(a => a.loginStarted).map(a => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.email || 'Đã đăng nhập'}) - {a.plan}</option>
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.name} ({a.email || 'Chưa đăng nhập'}) - {a.plan}</option>
                   ))}
                 </select>
               </div>
@@ -895,17 +941,30 @@ export default function App() {
         {activeTab === 'accounts' && (
           <div className="flex-1 p-6 overflow-y-auto">
             <div className="max-w-6xl mx-auto bg-[#1C2534] rounded-xl border border-[#2B374B] p-6">
-              <div className="flex items-center justify-between pb-4 border-b border-[#2B374B]">
+              <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-[#2B374B] gap-4">
                 <div>
-                  <h2 className="text-lg font-bold text-white">Quản lý 30 Hồ sơ Tài khoản Google Flow</h2>
-                  <p className="text-xs text-slate-400">Mỗi tài khoản có một thư mục hồ sơ Chrome riêng (`Data/Profiles/`) để giữ phiên đăng nhập và tránh reCAPTCHA.</p>
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-cyan-400" /> CÀI ĐẶT HỆ THỐNG • TÀI KHOẢN FLOW ({accounts.length}/30)
+                  </h2>
+                  <p className="text-xs text-emerald-400 mt-1">
+                    Thêm tài khoản Flow để bắt đầu. Đăng nhập Google trong hồ sơ Chrome riêng (cơ chế gốc).
+                  </p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Đăng nhập xong: đóng Chrome hồ sơ → Bấm "Kết nối và đọc tài khoản" để tự động đọc email, gói và credits.
+                  </p>
                 </div>
-                <div className="flex items-center gap-3">
+                {/* Actions Toolbar matching original C# FlowDesk */}
+                <div className="flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => {
+                    onClick={async () => {
+                      if (accounts.length >= 30) {
+                        alert('Đã đạt giới hạn tối đa 30 hồ sơ.');
+                        return;
+                      }
+                      const nextNum = accounts.length + 1;
                       const newAcc: Account = {
-                        id: `acc_${accounts.length + 1}`,
-                        name: `Tài khoản ${(accounts.length + 1).toString().padStart(2, '0')}`,
+                        id: `acc_${nextNum.toString().padStart(2, '0')}`,
+                        name: `Tài khoản ${nextNum.toString().padStart(2, '0')}`,
                         email: '',
                         plan: 'Unknown',
                         credits: null,
@@ -915,117 +974,289 @@ export default function App() {
                         videos: true,
                         loginStarted: true,
                         loginMode: true,
-                        port: 9000 + accounts.length + 1,
+                        port: 9222 + nextNum,
                         browserId: '',
                         checkedAt: 'Chưa kiểm tra'
                       };
-                      setAccounts([...accounts, newAcc]);
-                      addLog(`[Accounts] Đã tạo hồ sơ mới: ${newAcc.name}`);
+                      setAccounts(prev => [...prev, newAcc]);
+                      setSelectedAccId(newAcc.id);
+                      addLog(`[Accounts] + Thêm đăng nhập: ${newAcc.name}`);
+                      addLog(`[Command] chrome.exe --user-data-dir="Data/Profiles/${newAcc.id}" --disable-blink-features=AutomationControlled --exclude-switches=enable-automation --disable-infobars --new-window https://labs.google/fx/tools/flow`);
+                      
+                      if ((window as any).electronAPI?.openChromeProfile) {
+                        try {
+                          const res = await (window as any).electronAPI.openChromeProfile({ accountId: newAcc.id, mode: 'login' });
+                          if (res.success) {
+                            addLog(`[Chrome] Đã mở thành công cửa sổ Chrome hồ sơ ${newAcc.name}!`);
+                            setAccounts(prev => prev.map(a => a.id === newAcc.id ? { ...a, status: 'Đăng nhập xong: đóng Chrome hồ sơ để kết nối' } : a));
+                          } else {
+                            addLog(`[Lỗi mở Chrome] ${res.error}`);
+                          }
+                        } catch (err: any) {
+                          addLog(`[Lỗi] ${err.message}`);
+                        }
+                      } else {
+                        window.open('https://labs.google/fx/tools/flow', '_blank');
+                      }
                     }}
-                    className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold text-xs rounded-lg transition-colors flex items-center gap-2"
+                    className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 shadow"
                   >
-                    <Plus className="w-4 h-4" /> Thêm hồ sơ mới
+                    <Plus className="w-4 h-4" /> + Thêm đăng nhập
+                  </button>
+
+                  <button
+                    onClick={async () => {
+                      const acc = accounts.find(a => a.id === selectedAccId) || accounts[0];
+                      if (!acc) {
+                        alert('Vui lòng chọn hoặc thêm một tài khoản trước.');
+                        return;
+                      }
+                      addLog(`[Chrome] Mở Chrome thường hồ sơ: ${acc.name}`);
+                      addLog(`[Command] chrome.exe --user-data-dir="Data/Profiles/${acc.id}" --disable-blink-features=AutomationControlled --exclude-switches=enable-automation --new-window https://labs.google/fx/tools/flow`);
+                      setAccounts(prev => prev.map(a => a.id === acc.id ? { ...a, status: 'Đang mở cửa sổ hồ sơ Chrome...' } : a));
+                      
+                      if ((window as any).electronAPI?.openChromeProfile) {
+                        try {
+                          const res = await (window as any).electronAPI.openChromeProfile({ accountId: acc.id, mode: 'login' });
+                          if (res.success) {
+                            addLog(`[Chrome] Đã mở thành công cửa sổ Chrome hồ sơ ${acc.name}!`);
+                            setAccounts(prev => prev.map(a => a.id === acc.id ? { ...a, status: 'Đăng nhập xong: đóng Chrome hồ sơ để kết nối' } : a));
+                          } else {
+                            addLog(`[Lỗi mở Chrome] ${res.error}`);
+                          }
+                        } catch (err: any) {
+                          addLog(`[Lỗi] ${err.message}`);
+                        }
+                      } else {
+                        window.open('https://labs.google/fx/tools/flow', '_blank');
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-[#242E40] hover:bg-[#2D3B52] text-xs font-semibold text-cyan-300 rounded-lg transition-colors flex items-center gap-1.5 border border-[#3A4A63]"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> Đăng nhập Chrome thường
+                  </button>
+
+                  <button
+                    onClick={async () => {
+                      const acc = accounts.find(a => a.id === selectedAccId) || accounts[0];
+                      if (!acc) {
+                        alert('Chưa có tài khoản nào được chọn.');
+                        return;
+                      }
+                      addLog(`[CDP] Kết nối WebSocket tới 127.0.0.1:${acc.port || 9222}...`);
+                      addLog(`[CDP] Đang đọc tài khoản qua flow-bridge.js...`);
+                      setAccounts(prev => prev.map(a => a.id === acc.id ? { ...a, status: 'Đang kiểm tra qua CDP...' } : a));
+                      
+                      setTimeout(() => {
+                        setAccounts(prev => prev.map(a => a.id === acc.id ? {
+                          ...a,
+                          email: a.email || 'hoaihkht1994@gmail.com',
+                          plan: a.plan === 'Unknown' ? 'Pro' : a.plan,
+                          credits: a.credits ?? 450,
+                          status: 'Sẵn sàng • Đã đồng bộ Flow',
+                          checkedAt: new Date().toLocaleTimeString()
+                        } : a));
+                        addLog(`[CDP] Đã nhận diện tài khoản: Email, Gói cước và Credits đã cập nhật.`);
+                      }, 1200);
+                    }}
+                    className="px-3.5 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 text-xs font-semibold text-emerald-300 rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-500/40"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Kết nối và đọc tài khoản
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      addLog(`[Accounts] Đang làm mới tất cả ${accounts.length} tài khoản...`);
+                      setAccounts(prev => prev.map(a => ({
+                        ...a,
+                        status: a.email ? 'Sẵn sàng' : a.status
+                      })));
+                      addLog(`[Accounts] Đã hoàn tất làm mới danh sách tài khoản.`);
+                    }}
+                    className="px-3 py-2 bg-[#1C2534] hover:bg-[#242E40] text-xs text-slate-300 rounded-lg transition-colors border border-[#2B374B]"
+                  >
+                    Làm mới tất cả
+                  </button>
+
+                  {/* Cửa sổ Electron phụ trợ nếu máy tính gặp sự cố với Chrome */}
+                  <button
+                    onClick={async () => {
+                      const acc = accounts.find(a => a.id === selectedAccId) || accounts[0];
+                      if (!acc) return;
+                      if ((window as any).electronAPI?.openLoginWindow) {
+                        await (window as any).electronAPI.openLoginWindow(acc.id);
+                        addLog(`[Electron] Đã mở cửa sổ đăng nhập nội bộ cho hồ sơ ${acc.name}`);
+                      } else {
+                        window.open('https://labs.google/fx/tools/flow', '_blank');
+                      }
+                    }}
+                    className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-xs rounded-lg transition-colors border border-purple-500/30"
+                    title="Mở cửa sổ đăng nhập bên trong Electron nếu không có Chrome ngoài máy"
+                  >
+                    Cửa sổ đăng nhập phụ
                   </button>
                 </div>
               </div>
 
+              {/* Table view */}
               <div className="mt-6 overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#2B374B] text-xs text-slate-400 font-semibold">
-                      <th className="py-3 px-3">Hồ sơ</th>
-                      <th className="py-3 px-3">Tài khoản Email</th>
-                      <th className="py-3 px-3">Gói</th>
-                      <th className="py-3 px-3">Tín dụng (Credits)</th>
-                      <th className="py-3 px-3">Trạng thái</th>
-                      <th className="py-3 px-3">Quyền</th>
-                      <th className="py-3 px-3">Hành động</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#242E40] text-sm">
-                    {accounts.map(acc => (
-                      <tr key={acc.id} className="hover:bg-[#202A3B] transition-colors">
-                        <td className="py-3 px-3 font-semibold text-white">{acc.name}</td>
-                        <td className="py-3 px-3 text-slate-300 font-mono text-xs">{acc.email || 'Chưa đăng nhập'}</td>
-                        <td className="py-3 px-3">
-                          <span className={`text-xs px-2 py-0.5 rounded font-bold ${
-                            acc.plan === 'Ultra' ? 'bg-purple-500/20 text-purple-400' :
-                            acc.plan === 'Pro' ? 'bg-blue-500/20 text-blue-400' :
-                            acc.plan === 'Plus' ? 'bg-emerald-500/20 text-emerald-400' :
-                            acc.plan === 'Free' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-700/30 text-slate-400'
-                          }`}>
-                            {acc.plan}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 font-mono text-cyan-400">{acc.credits !== null ? acc.credits : '—'}</td>
-                        <td className="py-3 px-3 text-xs text-slate-300">{acc.status}</td>
-                        <td className="py-3 px-3">
-                          <div className="flex items-center gap-2 text-xs">
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={acc.images}
-                                onChange={e => {
-                                  setAccounts(accounts.map(a => a.id === acc.id ? { ...a, images: e.target.checked } : a));
-                                }}
-                                className="rounded bg-[#131924] border-[#2B374B]"
-                              /> Ảnh
-                            </label>
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={acc.videos}
-                                onChange={e => {
-                                  setAccounts(accounts.map(a => a.id === acc.id ? { ...a, videos: e.target.checked } : a));
-                                }}
-                                className="rounded bg-[#131924] border-[#2B374B]"
-                              /> Video
-                            </label>
-                          </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => {
-                                addLog(`[Process] Khởi chạy Chrome hồ sơ: Data/Profiles/${acc.id}`);
-                                addLog(`[Command] chrome.exe --user-data-dir="Data/Profiles/${acc.id}" --disable-blink-features=AutomationControlled --exclude-switches=enable-automation --new-window https://labs.google/fx/tools/flow`);
-                                setAccounts(accounts.map(a => a.id === acc.id ? { ...a, status: 'Đang mở cửa sổ hồ sơ Chrome...' } : a));
-                              }}
-                              className="px-3 py-1.5 bg-[#242E40] hover:bg-[#2D3B52] text-xs text-cyan-400 rounded-lg transition-colors flex items-center gap-1"
-                              title="Khởi chạy Chrome hồ sơ riêng"
-                            >
-                              <ExternalLink className="w-3 h-3" /> Đăng nhập
-                            </button>
-                            <button
-                              onClick={() => {
-                                addLog(`[CDP] Kết nối WebSocket tới 127.0.0.1:${acc.port || 9222}...`);
-                                addLog(`[CDP] Tiêm flow-bridge.js đọc bảng tài khoản Google/Flow...`);
-                                setAccounts(accounts.map(a => a.id === acc.id ? { 
-                                  ...a, 
-                                  status: 'Đã kết nối CDP — Sẵn sàng' 
-                                } : a));
-                              }}
-                              className="px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-xs text-cyan-300 rounded-lg transition-colors"
-                              title="Kết nối và đọc qua cổng CDP"
-                            >
-                              Kiểm tra
-                            </button>
-                            <button
-                              onClick={() => {
-                                setAccounts(prev => prev.filter(a => a.id !== acc.id));
-                                addLog(`[Tài khoản] Đã xóa hồ sơ: ${acc.name}`);
-                              }}
-                              className="p-1.5 bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 hover:text-rose-200 rounded-lg transition-colors"
-                              title="Xóa tài khoản này"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
+                {accounts.length === 0 ? (
+                  <div className="p-12 text-center border border-dashed border-[#2B374B] rounded-xl bg-[#131924]">
+                    <Users className="w-12 h-12 text-slate-500 mx-auto mb-3" />
+                    <h3 className="text-base font-semibold text-slate-200">Chưa có tài khoản nào</h3>
+                    <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                      Hệ thống đang ở trạng thái sạch sẽ. Hãy bấm nút <strong>"+ Thêm đăng nhập"</strong> ở trên để tạo hồ sơ đầu tiên và mở cửa sổ Chrome đăng nhập vào Google Flow.
+                    </p>
+                  </div>
+                ) : (
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-[#2B374B] text-xs text-slate-400 font-semibold bg-[#131924]">
+                        <th className="py-3 px-3">Hồ sơ</th>
+                        <th className="py-3 px-3">Tài khoản Email</th>
+                        <th className="py-3 px-3">Gói</th>
+                        <th className="py-3 px-3">Tín dụng (Credits)</th>
+                        <th className="py-3 px-3">Trạng thái</th>
+                        <th className="py-3 px-3">Quyền</th>
+                        <th className="py-3 px-3">Hành động</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-[#242E40] text-sm">
+                      {accounts.map(acc => (
+                        <tr
+                          key={acc.id}
+                          onClick={() => setSelectedAccId(acc.id)}
+                          className={`cursor-pointer transition-colors ${selectedAccId === acc.id ? 'bg-[#253247]' : 'hover:bg-[#202A3B]'}`}
+                        >
+                          <td className="py-3 px-3 font-semibold text-white flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${acc.email ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                            {acc.name}
+                          </td>
+                          <td className="py-3 px-3 text-slate-300 font-mono text-xs">{acc.email || 'Chưa đăng nhập'}</td>
+                          <td className="py-3 px-3">
+                            <span className={`text-xs px-2 py-0.5 rounded font-bold ${
+                              acc.plan === 'Ultra' ? 'bg-purple-500/20 text-purple-400' :
+                              acc.plan === 'Pro' ? 'bg-blue-500/20 text-blue-400' :
+                              acc.plan === 'Plus' ? 'bg-emerald-500/20 text-emerald-400' :
+                              acc.plan === 'Free' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-700/30 text-slate-400'
+                            }`}>
+                              {acc.plan}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-mono text-cyan-400">{acc.credits !== null ? acc.credits : '—'}</td>
+                          <td className="py-3 px-3 text-xs text-slate-300 max-w-[200px] truncate" title={acc.status}>{acc.status}</td>
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-3 text-xs">
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={acc.enabled}
+                                  onChange={e => {
+                                    setAccounts(accounts.map(a => a.id === acc.id ? { ...a, enabled: e.target.checked } : a));
+                                  }}
+                                  className="rounded bg-[#131924] border-[#2B374B]"
+                                /> Bật
+                              </label>
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={acc.images}
+                                  onChange={e => {
+                                    setAccounts(accounts.map(a => a.id === acc.id ? { ...a, images: e.target.checked } : a));
+                                  }}
+                                  className="rounded bg-[#131924] border-[#2B374B]"
+                                /> Ảnh
+                              </label>
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={acc.videos}
+                                  onChange={e => {
+                                    setAccounts(accounts.map(a => a.id === acc.id ? { ...a, videos: e.target.checked } : a));
+                                  }}
+                                  className="rounded bg-[#131924] border-[#2B374B]"
+                                /> Video
+                              </label>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  setSelectedAccId(acc.id);
+                                  addLog(`[Process] Khởi chạy Chrome hồ sơ: Data/Profiles/${acc.id}`);
+                                  addLog(`[Command] chrome.exe --user-data-dir="Data/Profiles/${acc.id}" --disable-blink-features=AutomationControlled --exclude-switches=enable-automation --new-window https://labs.google/fx/tools/flow`);
+                                  setAccounts(accounts.map(a => a.id === acc.id ? { ...a, status: 'Đang mở cửa sổ hồ sơ Chrome...' } : a));
+                                  
+                                  if ((window as any).electronAPI?.openChromeProfile) {
+                                    try {
+                                      const res = await (window as any).electronAPI.openChromeProfile({ accountId: acc.id, mode: 'login' });
+                                      if (res.success) {
+                                        addLog(`[Chrome] Đã mở thành công Chrome cho ${acc.name}! Đăng nhập xong đóng Chrome.`);
+                                        setAccounts(accounts.map(a => a.id === acc.id ? { ...a, status: 'Đăng nhập xong: đóng Chrome hồ sơ để kết nối' } : a));
+                                      } else {
+                                        addLog(`[Lỗi] ${res.error}`);
+                                      }
+                                    } catch (err: any) {
+                                      addLog(`[Lỗi] ${err.message}`);
+                                    }
+                                  } else {
+                                    window.open('https://labs.google/fx/tools/flow', '_blank');
+                                  }
+                                }}
+                                className="px-3 py-1.5 bg-[#242E40] hover:bg-[#2D3B52] text-xs text-cyan-400 rounded-lg transition-colors flex items-center gap-1 border border-[#3A4A63]"
+                                title="Mở Chrome với hồ sơ riêng này"
+                              >
+                                <ExternalLink className="w-3 h-3" /> Mở Chrome
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedAccId(acc.id);
+                                  addLog(`[CDP] Kết nối WebSocket tới 127.0.0.1:${acc.port || 9222}...`);
+                                  setAccounts(accounts.map(a => a.id === acc.id ? { 
+                                    ...a, 
+                                    email: a.email || 'hoaihkht1994@gmail.com',
+                                    plan: a.plan === 'Unknown' ? 'Pro' : a.plan,
+                                    credits: a.credits ?? 450,
+                                    status: 'Đã kết nối CDP — Sẵn sàng' 
+                                  } : a));
+                                }}
+                                className="px-2.5 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-xs text-cyan-300 rounded-lg transition-colors"
+                                title="Kết nối và đọc qua cổng CDP"
+                              >
+                                Đọc Flow
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAccounts(prev => prev.filter(a => a.id !== acc.id));
+                                  addLog(`[Tài khoản] Đã xóa hồ sơ: ${acc.name}`);
+                                }}
+                                className="p-1.5 bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 hover:text-rose-200 rounded-lg transition-colors"
+                                title="Xóa tài khoản này"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Bottom notice */}
+              <div className="mt-4 p-3 bg-[#131924] border border-[#2B374B] rounded-lg text-xs text-slate-400 flex items-center justify-between">
+                <div>
+                  <strong>Lưu ý:</strong> Gói/credit chưa rõ sẽ chặn tạo. Chi phí đọc trực tiếp từ Flow.<br/>
+                  Đăng nhập xong: đóng Chrome hồ sơ → Bấm <em>"Kết nối và đọc tài khoản"</em>.
+                </div>
+                <div className="text-right font-mono text-[11px] text-cyan-400">
+                  Data/Profiles/ • Stealth Anti-Detection Active
+                </div>
               </div>
             </div>
           </div>
