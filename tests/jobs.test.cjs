@@ -94,6 +94,20 @@ test('failed download does not report success; submitted command becomes uncerta
   assert.equal(f.job.State, 'Cần kiểm tra'); assert.equal(f.job.Results.length, 0); assert.equal(f.job.Submitted, true);
 });
 
+test('job failure keeps Chrome/tab open by default for inspection', async () => {
+  const f = fixture(); let closed = 0;
+  f.browser.close = async () => { closed++; }; f.browser.closeJobTab = async () => { closed++; };
+  f.runner.downloadFile = async () => { throw new Error('failed'); };
+  await f.runner.runQueue({ kind: 'image' });
+  assert.equal(f.job.State, 'Cần kiểm tra'); assert.equal(closed, 0);
+});
+
+test('explicit legacy close-on-error option remains available', async () => {
+  const f = fixture(); let closed = 0; f.browser.close = async () => { closed++; };
+  f.runner.downloadFile = async () => { throw new Error('failed'); };
+  await f.runner.runQueue({ kind: 'image', closeBrowserOnError: true }); assert.equal(closed, 1);
+});
+
 test('requested x2 waits for two downloaded files', async () => {
   const f = fixture('x2'); let reads = 0;
   const client = { async bridge() { return { urls: ++reads === 1 ? ['https://storage.googleapis.com/one'] : ['https://storage.googleapis.com/one', 'https://storage.googleapis.com/two'] }; } };

@@ -54,6 +54,11 @@
     if(location.hostname!=='flow.google.com'&&location.hostname!=='labs.google'&&!accountWidget)throw Error('Hãy hoàn tất đăng nhập Google rồi mở Flow.');
     if(request.action==='account'){
       await sleep(100);
+      const accountHeader=list('.header-user-button,flow-header-user-icon')[0];
+      const tierTexts=accountHeader?list('flow-user-tier-chip',accountHeader).map(e=>norm(e.textContent)):[];
+      if(accountHeader&&!tierTexts.length)tierTexts.push(...list('span,div,button',accountHeader).filter(e=>e.children.length===0).map(e=>norm(e.textContent)));
+      const headerBadge=['Ultra','Pro','Plus'].find(p=>tierTexts.some(t=>new RegExp('^(?:Google(?: AI)?\\s+|AI\\s+)?'+p+'$','i').test(t)));
+      const headerPlan=headerBadge||(accountHeader?'Free':request.headerPlan||'Unknown');
       const emailPattern=/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/;
       function findPanel(){
         if(accountWidget&&emailPattern.test(document.body.innerText)&&/(tín dụng|credits?)/i.test(document.body.innerText))return document.body;
@@ -81,17 +86,18 @@
         if(buttons[0].getAttribute('aria-expanded')!=='true')tap(buttons[0]);
         await sleep(700);panel=findPanel();
         if(!panel){const frames=list('iframe').filter(e=>e.getBoundingClientRect().width>150&&e.getBoundingClientRect().height>150&&!/RotateCookiesPage/.test(e.src||''));
-          if(frames.length)return {ok:false,code:'ACCOUNT_FRAME_REQUIRED',frameUrls:frames.map(e=>e.src),error:'Đang đọc bảng Google trong khung tài khoản.'};
+          if(frames.length)return {ok:false,code:'ACCOUNT_FRAME_REQUIRED',headerPlan,frameUrls:frames.map(e=>e.src),error:'Đang đọc bảng Google trong khung tài khoản.'};
           panel=await wait(findPanel,'Đã mở bảng Google nhưng chưa đọc được nội dung email/tín dụng.');}
       }
       const creditEl=list('.credits-count',panel)[0]||list('a',panel).find(e=>/\d.*(?:tín dụng|credits?)/i.test(e.innerText));
       const creditText=norm(creditEl?.innerText)||norm(panel.innerText);
       const daily=list('.refresh-daily-label',panel).map(e=>norm(e.innerText)).join(' ')||(norm(panel.innerText).match(/[^.!\n]*(?:làm mới hằng ngày|làm mới hàng ngày|refresh(?:ed)? daily|refresh(?:es)? every day)[^.!\n]*/i)||[])[0]||'';
       const leaves=list('span,div',panel).filter(e=>e.children.length===0&&!e.closest('a,button,.upsell-link')).map(e=>norm(e.innerText));
-      let plan='Unknown',evidence='Không có nhãn gói rõ ràng trong Flow';
-      for(const p of ['Ultra','Pro','Plus']){const hit=leaves.find(t=>new RegExp('^(?:Google(?: AI)?\\s+|AI\\s+)?'+p+'$','i').test(t));if(hit){plan=p;evidence=hit;break;}}
+      let plan=headerPlan,evidence=headerPlan==='Free'?'Không có nhãn gói cạnh avatar; xác minh email bên dưới':headerPlan!=='Unknown'?'Nhãn gói cạnh avatar: '+headerPlan:'Không có nhãn gói rõ ràng trong Flow';
+      if(plan==='Unknown')for(const p of ['Ultra','Pro','Plus']){const hit=leaves.find(t=>new RegExp('^(?:Google(?: AI)?\\s+|AI\\s+)?'+p+'$','i').test(t));if(hit){plan=p;evidence=hit;break;}}
       if(plan==='Unknown'&&daily&&/hằng ngày|hàng ngày|daily|every day/i.test(daily)){plan='Free';evidence='Credit làm mới hằng ngày: '+daily;}
       const email=norm(panel.querySelector('.user-email')?.textContent)||((panel.innerText.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/)||[])[0]||'');
+      if(!email&&plan==='Free'){plan='Unknown';evidence='Chưa xác minh email đăng nhập.';}
       const result={email,plan,credits:number(creditText),evidence,creditText,checkedAt:new Date().toISOString()};
       const close=list('button',panel).find(e=>/Đóng bảng điều khiển tài khoản|Close account panel/i.test(label(e)));
       return {ok:true,data:result};

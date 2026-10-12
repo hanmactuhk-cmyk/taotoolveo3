@@ -107,7 +107,7 @@ class JobRunner {
     } catch (error) {
       job.State = job.Submitted ? 'Cần kiểm tra' : 'Lỗi'; job.Note = error.message; this.log(`[Job ${job.Id}] ${error.message}`);
       if (/hoạt động bất thường|unusual activity/i.test(error.message)) this.stop();
-      try {
+      if (this.lastOptions.closeBrowserOnError === true) try {
         const another = this.store.data.Queue.some(item => item.Id !== job.Id && item.AccountId === account.Id && activeStates.has(item.State));
         if (another && this.browser.closeJobTab) await this.browser.closeJobTab(account, job.Url); else await this.browser.close(account);
       } catch (closeError) { this.log('Không đóng được Chrome: ' + closeError.message); }

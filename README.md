@@ -107,3 +107,7 @@ Nếu có Data cũ cạnh EXE, ứng dụng tiếp tục dùng dữ liệu đó.
 - 24 kiểm tra cục bộ: qua, gồm IPC chọn ảnh/lưu dữ liệu, account/page target, tab riêng, frame slots, model, retry, stop, kiểm tra tải tệp và file chooser bất đồng bộ.
 - Đóng gói Windows dạng thư mục (`electron-builder --win --x64 --dir`): qua; đã đối chiếu nội dung bridge/main/runner/client/index trong app.asar với nguồn.
 - Các kiểm tra Chrome/Flow dùng mock; chưa gửi tạo ảnh/video trên tài khoản Flow thật. Đây không phải bằng chứng lỗi hoạt động bất thường đã được khắc phục.
+
+
+### 1.0.2: gói tài khoản và Chrome khi lỗi
+Đọc PLUS/PRO/ULTRA ở cạnh avatar. Không có badge ghi Free sau khi đã xác minh email; không suy đoán từ quảng cáo nâng cấp. Gói từ header được giữ khi bảng tài khoản ở iframe. Mặc định giữ Chrome/tab mở khi job lỗi để kiểm tra; nút đóng hồ sơ thủ công vẫn có. Tùy chọn closeBrowserOnError=true vẫn giữ cho trường hợp muốn hành vi cũ.

@@ -181,6 +181,7 @@ class CdpClient {
             });
             const innerExpr = sourceCode.replace('__FLOWDESK_REQUEST__', JSON.stringify({
               action: 'account',
+              headerPlan: value.headerPlan,
               accountFrame: true
             }));
             const inner = await this.call('Runtime.evaluate', {
