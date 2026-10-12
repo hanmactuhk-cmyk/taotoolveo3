@@ -106,7 +106,18 @@ class JobRunner {
       this.store.save(); this.updateQueue(); await this.monitorJob(cdp, job, required);
     } catch (error) {
       job.State = job.Submitted ? 'Cần kiểm tra' : 'Lỗi'; job.Note = error.message; this.log(`[Job ${job.Id}] ${error.message}`);
-      if (/hoạt động bất thường|unusual activity/i.test(error.message)) this.stop();
+      if (/hoạt động bất thường|unusual activity/i.test(error.message)) {
+        this.log(`[Job ${job.Id}] Phát hiện reCAPTCHA / hoạt động bất thường. Đang tự động dọn _grecaptcha và tải lại tab...`);
+        try {
+          if (cdp && cdp.clearCaptchaSession) {
+            await cdp.clearCaptchaSession();
+            await cdp.call('Page.reload', { ignoreCache: false });
+          }
+        } catch (clearErr) {
+          this.log(`[Job ${job.Id}] Lỗi tự động dọn captcha: ${clearErr.message}`);
+        }
+        this.stop();
+      }
       if (this.lastOptions.closeBrowserOnError === true) try {
         const another = this.store.data.Queue.some(item => item.Id !== job.Id && item.AccountId === account.Id && activeStates.has(item.State));
         if (another && this.browser.closeJobTab) await this.browser.closeJobTab(account, job.Url); else await this.browser.close(account);

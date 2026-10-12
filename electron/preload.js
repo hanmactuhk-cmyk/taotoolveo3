@@ -2,12 +2,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // Ẩn navigator.webdriver ngay từ tầng Preload
 try {
-  Object.defineProperty(navigator, 'webdriver', {
-    get: () => undefined
-  });
-  Object.defineProperty(navigator, 'languages', {
-    get: () => ['vi-VN', 'vi', 'en-US', 'en']
-  });
+  if ('webdriver' in navigator) {
+    delete Object.getPrototypeOf(navigator).webdriver;
+    delete navigator.webdriver;
+  }
 } catch (e) {}
 
 // Preload chỉ cung cấp IPC điều khiển cần thiết qua contextBridge;
@@ -19,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Quản lý tài khoản
   openChromeLogin: (accountId) => ipcRenderer.invoke('account:open-login', accountId),
   checkAccount: (accountId) => ipcRenderer.invoke('account:check', accountId),
+  clearCaptchaSession: (accountId) => ipcRenderer.invoke('account:clear-captcha', accountId),
   closeAccount: (accountId) => ipcRenderer.invoke('account:close', accountId),
   createAccount: () => ipcRenderer.invoke('account:create'),
   deleteAccount: (accountId) => ipcRenderer.invoke('account:delete', accountId),

@@ -47,7 +47,10 @@
     if(slot==='start'||slot==='end'){const frame=frames[slot==='start'?0:1];return frame?frame.querySelectorAll('img,flow-image-reference,flow-prompt-image').length:0;}
     return new Set(list('.ProseMirror img,flow-ingredient-bar img,flow-prompt-image,flow-image-reference')).size;
   }
-  function securityError(){return list('flow-error-tile .error-message').map(text).find(t=>/hoạt động bất thường|unusual activity/i.test(t))||'';}
+  function securityError(){
+    const errNodes = list('flow-error-tile .error-message, [role="alert"], mat-snack-bar-container, .error-message, [class*="error-message"]');
+    return errNodes.map(text).find(t=>/hoạt động bất thường|unusual activity|sửa đổi trang|modify the page/i.test(t))||'';
+  }
   function tileId(e){if(!window.__flowdeskTiles)window.__flowdeskTiles={map:new WeakMap(),next:0};const t=window.__flowdeskTiles;if(!t.map.has(e))t.map.set(e,'visible-tile-'+(++t.next));return t.map.get(e);}
   try {
     const accountWidget=request.accountFrame&&((location.hostname==='ogs.google.com'&&/account/.test(location.pathname))||(location.hostname==='accounts.google.com'&&/SignOutOptions/.test(location.pathname)));
@@ -197,9 +200,20 @@
       }
       return {ok:true,data:{urls,progress:progress.length?Math.min(...progress):null,message:urls.length?'Đã tìm media mới trong thẻ có prompt khớp.':'Đang theo dõi thẻ có prompt khớp.'}};
     }
+    if(request.action==='clearCaptchaSession'){
+      try { localStorage.removeItem('_grecaptcha'); } catch(e) {}
+      try {
+        for (const k of Object.keys(sessionStorage)) {
+          if (k.startsWith('flowdesk:')) sessionStorage.removeItem(k);
+        }
+      } catch(e) {}
+      closeOverlays();
+      return {ok:true,data:{cleared:true}};
+    }
     if(request.action==='prepareSubmit'){
       closeOverlays();
       await sleep(250);
+      try { localStorage.removeItem('_grecaptcha'); } catch(e) {}
       if(securityError())throw Error(securityError());
       if(promptText()!==request.prompt.replace(/\r/g,'').trim())throw Error('Prompt trong Flow đã thay đổi; hãy chuẩn bị lại.');
       if(alertText())throw Error('Flow đang báo: '+alertText());

@@ -109,24 +109,50 @@ class CdpClient {
     await this.call('Network.enable', {});
     await this.call('Page.enable', {});
 
-    // STEALTH MODE: Ẩn cờ bot navigator.webdriver và cấu hình ngôn ngữ chuẩn
+    // STEALTH & ANTI-BOT: Chuẩn hóa ẩn dấu vết tự động hóa
+    // Không giả mạo PluginArray thô thiển ([1,2,3,4,5]) hay ghi đè window.chrome gốc,
+    // tránh kích hoạt cảnh báo "tiện ích mở rộng sửa đổi trang" của Google Flow/reCAPTCHA
     await this.call('Page.addScriptToEvaluateOnNewDocument', {
       source: `
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'] });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-        window.chrome = { runtime: {}, app: {}, loadTimes: function() {}, csi: function() {} };
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-          parameters.name === 'notifications' ?
-            Promise.resolve({ state: 'denied' }) :
-            originalQuery(parameters)
-        );
+        try {
+          if ('webdriver' in navigator) {
+            delete Object.getPrototypeOf(navigator).webdriver;
+            delete navigator.webdriver;
+          }
+        } catch(e) {}
+
+        try {
+          if (window.localStorage && window.localStorage.getItem('_grecaptcha')) {
+            window.localStorage.removeItem('_grecaptcha');
+          }
+        } catch(e) {}
       `
     });
 
     const version = await this.call('Browser.getVersion', {});
     if (this.trace) this.trace(`[Browser] ${version.product} (Stealth Mode Active)`);
+  }
+
+  async clearCaptchaSession() {
+    try {
+      await this.call('Runtime.evaluate', {
+        expression: `
+          (function() {
+            try { localStorage.removeItem('_grecaptcha'); } catch(e) {}
+            try {
+              for (const k of Object.keys(sessionStorage)) {
+                if (k.startsWith('flowdesk:')) sessionStorage.removeItem(k);
+              }
+            } catch(e) {}
+            return true;
+          })()
+        `,
+        returnByValue: true
+      });
+      if (this.trace) this.trace('[Anti-Bot] Đã xóa cache reCAPTCHA (_grecaptcha) và làm sạch session.');
+    } catch (err) {
+      if (this.trace) this.trace('[Anti-Bot] Lỗi xóa cache reCAPTCHA: ' + err.message);
+    }
   }
 
   async bridge(request) {
@@ -213,16 +239,54 @@ class CdpClient {
   }
 
   async submit(jobId, prompt) {
+    await this.clearCaptchaSession();
     const point = await this.bridge({ action: 'prepareSubmit', jobId, prompt });
     await this.call('Page.bringToFront', {});
     const x = Number(point.x);
     const y = Number(point.y);
 
-    await this.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
-    await this.call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
-    await this.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+    await this.humanClick(x, y);
 
     return await this.bridge({ action: 'confirmSubmit', jobId });
+  }
+
+  async humanClick(x, y) {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const offsetX = (Math.random() * 8) - 4;
+    const offsetY = (Math.random() * 6) - 3;
+    const targetX = Math.round(x + offsetX);
+    const targetY = Math.round(y + offsetY);
+
+    const steps = 4 + Math.floor(Math.random() * 3);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const curX = Math.round(targetX - (1 - t) * 12 * (1 - t));
+      const curY = Math.round(targetY - (1 - t) * 8 * (1 - t));
+      await this.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: curX, y: curY });
+      await sleep(10 + Math.floor(Math.random() * 8));
+    }
+
+    await sleep(50 + Math.floor(Math.random() * 40));
+
+    await this.call('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: targetX,
+      y: targetY,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1
+    });
+
+    await sleep(70 + Math.floor(Math.random() * 40));
+
+    await this.call('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: targetX,
+      y: targetY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1
+    });
   }
 
   async fillPrompt(prompt) {

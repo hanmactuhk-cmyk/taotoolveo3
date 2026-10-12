@@ -394,6 +394,22 @@ export default function App() {
     }
   };
 
+  const handleClearCaptcha = async (accId: string) => {
+    addLog(`[Anti-Bot] Đang dọn cache reCAPTCHA và tải lại tab cho tài khoản ${accId}...`);
+    const api = (window as any).electronAPI;
+    if (api && api.clearCaptchaSession) {
+      try {
+        const res = await api.clearCaptchaSession(accId);
+        addLog(`[Anti-Bot] ${res.message || 'Đã dọn dẹp và tải lại tab thành công.'}`);
+        handleCheckAccount(accId);
+      } catch (err: any) {
+        addLog(`[Anti-Bot Lỗi] ${err.message}`);
+      }
+    } else {
+      addLog('[Preview] Chức năng dọn captcha chạy qua Electron CDP.');
+    }
+  };
+
   const pickImages = async (job?: StudioTask, slot: 'start' | 'end' | 'reference' = 'reference') => {
     const api = (window as any).electronAPI;
     if (job && ['Đang chạy', 'Đang gửi'].includes(job.State)) { addLog('Không đổi ảnh của job đang chạy.'); return true; }
@@ -1153,6 +1169,16 @@ export default function App() {
                                 className="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 rounded transition-colors text-[11px]"
                               >
                                 Kiểm tra
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleClearCaptcha(acc.Id);
+                                }}
+                                className="px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded transition-colors text-[11px]"
+                                title="Xóa cache _grecaptcha và tải lại tab để khắc phục lỗi hoạt động bất thường"
+                              >
+                                Dọn Captcha
                               </button>
                               <button
                                 onClick={(e) => {

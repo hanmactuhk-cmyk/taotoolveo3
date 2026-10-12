@@ -2,7 +2,7 @@ const { app, BrowserWindow, session, ipcMain, shell, dialog } = require('electro
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { checkAccount } = require('./account-service');
+const { checkAccount, clearCaptchaSession } = require('./account-service');
 const { syncDrafts } = require('./drafts');
 const { activeStates } = require('./job-utils');
 const selectedImages = new Set();
@@ -203,6 +203,14 @@ function registerIpc() {
 
     if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ này kết thúc trước khi kiểm tra.');
     return checkAccount(browserManager, store, acc, message => sendToRenderer('log', message),
+      account => sendToRenderer('account-updated', account));
+  });
+
+  ipcMain.handle('account:clear-captcha', async (event, accountId) => {
+    const acc = store.data.Accounts.find(a => a.Id === accountId);
+    if (!acc) throw new Error('Không tìm thấy tài khoản.');
+    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ này kết thúc trước khi dọn captcha.');
+    return clearCaptchaSession(browserManager, store, acc, message => sendToRenderer('log', message),
       account => sendToRenderer('account-updated', account));
   });
 

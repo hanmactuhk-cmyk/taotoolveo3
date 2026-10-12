@@ -25,4 +25,28 @@ async function checkAccount(browser, store, account, log = () => {}, updated = (
   } finally { if (client) client.dispose(); }
 }
 
-module.exports = { checkAccount };
+async function clearCaptchaSession(browser, store, account, log = () => {}, updated = () => {}) {
+  account.Status = 'Đang dọn cache captcha & làm mới tab...';
+  updated(account);
+  let client;
+  try {
+    client = await browser.connectFlowTab(account);
+    client.trace = log;
+    if (client.clearCaptchaSession) await client.clearCaptchaSession();
+    await client.call('Page.reload', { ignoreCache: false });
+    log(`[Anti-Bot] Đã xóa _grecaptcha và tải lại tab Flow cho ${account.Name}`);
+    account.Status = 'Đã làm sạch captcha & tải lại Flow';
+    store.save();
+    updated(account);
+    return { success: true, message: 'Đã dọn dẹp token reCAPTCHA và tải lại tab Flow.' };
+  } catch (error) {
+    account.Status = 'Lỗi dọn captcha: ' + error.message;
+    store.save();
+    updated(account);
+    throw error;
+  } finally {
+    if (client) client.dispose();
+  }
+}
+
+module.exports = { checkAccount, clearCaptchaSession };
