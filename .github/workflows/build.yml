@@ -28,7 +28,7 @@ jobs:
     - name: Build React & Package Electron (.exe)
       run: |
         npx vite build
-        npx electron-builder --win --x64
+        npx electron-builder --win --x64 --publish never
 
     - name: Upload FlowDesk Setup (.exe)
       uses: actions/upload-artifact@v4
