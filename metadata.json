@@ -1,0 +1,6 @@
+{
+  "name": "FlowDesk Studio - Electron Desktop App",
+  "description": "Ứng dụng desktop Electron tự động hóa Google Flow với quản lý tài khoản, CDP WebSocket, hàng chờ song song và cấu hình chống reCAPTCHA / Stealth.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

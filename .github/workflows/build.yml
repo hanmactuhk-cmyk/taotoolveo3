@@ -1,0 +1,29 @@
+name: Build FlowDesk.exe
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build FlowDesk.exe
+      run: |
+        call build.cmd
+
+    - name: Upload FlowDesk.exe Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FlowDesk-Windows-Executable
+        path: FlowDesk.exe
