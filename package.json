@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "flowdesk-studio",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.2",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -10,7 +10,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "electron:dev": "vite build && electron .",
-    "electron:build": "vite build && electron-builder --win --x64"
+    "electron:build": "vite build && electron-builder --win --x64",
+    "test": "node --test tests/*.test.cjs"
   },
   "build": {
     "appId": "com.flowdesk.studio",
@@ -26,7 +27,9 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "flow-bridge.js",
+      "package.json"
     ],
     "nsis": {
       "oneClick": false,
@@ -35,15 +38,8 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
-    "@tailwindcss/vite": "^4.3.3",
-    "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
-    "react": "^19.0.1",
-    "react-dom": "^19.0.1",
-    "vite": "^8.3.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
@@ -56,6 +52,16 @@
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2"
-  }
+    "typescript": "^7.0.2",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.0.12",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "vite": "^8.3.0"
+  },
+  "description": "FlowDesk Studio desktop job and Chrome profile manager"
 }

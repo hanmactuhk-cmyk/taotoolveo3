@@ -11,7 +11,15 @@ class Store {
 
   getStoreDir() {
     const appRoot = app && app.isPackaged ? path.dirname(process.execPath) : process.cwd();
-    const dataDir = path.join(appRoot, 'Data');
+    const legacy = path.join(appRoot, 'Data');
+    const portable = process.env.PORTABLE_EXECUTABLE_DIR && path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'Data');
+    for (const candidate of [portable, legacy].filter(Boolean)) {
+      if (fs.existsSync(path.join(candidate, 'accounts.json'))) {
+        fs.accessSync(candidate, fs.constants.R_OK | fs.constants.W_OK);
+        return candidate;
+      }
+    }
+    const dataDir = app && app.isPackaged ? path.join(app.getPath('userData'), 'Data') : legacy;
     if (!fs.existsSync(dataDir)) {
       try {
         fs.mkdirSync(dataDir, { recursive: true });
@@ -31,9 +39,8 @@ class Store {
       try {
         const raw = fs.readFileSync(this.fileName, 'utf8');
         const parsed = JSON.parse(raw);
-        if (!parsed.Accounts) parsed.Accounts = [];
-        if (!parsed.Jobs) parsed.Jobs = [];
-        if (!parsed.Queue) parsed.Queue = [];
+        if (!Array.isArray(parsed.Accounts) || !Array.isArray(parsed.Queue)) throw new Error('Dữ liệu tài khoản/hàng chờ không hợp lệ.');
+        if (!Array.isArray(parsed.Jobs)) parsed.Jobs = [];
         if (!parsed.OutputFolder) parsed.OutputFolder = path.join(this.root, 'Results');
 
         // Khôi phục trạng thái gián đoạn từ phiên trước
@@ -51,7 +58,20 @@ class Store {
         }
         return parsed;
       } catch (err) {
-        console.error('[Store] Lỗi đọc accounts.json:', err);
+        const backup = this.fileName + '.bak';
+        if (fs.existsSync(backup)) {
+          const parsed = JSON.parse(fs.readFileSync(backup, 'utf8'));
+          if (Array.isArray(parsed.Accounts) && Array.isArray(parsed.Queue)) {
+            this.recoveredFromBackup = true;
+            for (const job of parsed.Queue) if (['Đang chạy', 'Đang gửi'].includes(job.State)) {
+              job.State = 'Cần kiểm tra'; job.Note = 'Khôi phục từ bản sao dự phòng; không tự gửi lại.';
+            }
+            parsed.Jobs = parsed.Jobs || [];
+            parsed.OutputFolder = parsed.OutputFolder || path.join(this.root, 'Results');
+            return parsed;
+          }
+        }
+        throw new Error(`Không đọc được dữ liệu; giữ nguyên tệp để phục hồi. ${err.message}`);
       }
     }
     return {
@@ -67,19 +87,20 @@ class Store {
     const jsonStr = JSON.stringify(this.data, null, 2);
     try {
       fs.writeFileSync(tempFile, jsonStr, 'utf8');
-      if (fs.existsSync(this.fileName)) {
+      if (fs.existsSync(this.fileName) && !this.recoveredFromBackup) {
         try {
           fs.copyFileSync(this.fileName, this.fileName + '.bak');
         } catch (e) {}
       }
       fs.renameSync(tempFile, this.fileName);
+      this.recoveredFromBackup = false;
     } catch (err) {
-      console.error('[Store] Lỗi lưu accounts.json:', err);
+      throw new Error('Không lưu được dữ liệu: ' + err.message);
     }
   }
 
   profileDir(account) {
-    if (!account.Id) throw new Error('Mã hồ sơ không hợp lệ.');
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(account.Id || '')) throw new Error('Mã hồ sơ không hợp lệ.');
     const dir = path.join(this.root, 'Profiles', account.Id);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return dir;
@@ -87,3 +108,4 @@ class Store {
 }
 
 module.exports = Store;
+

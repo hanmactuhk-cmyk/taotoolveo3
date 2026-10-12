@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+dist-electron/
+.pnpm-store/
+Data/
+tests/.fixture-*/
+tests/.media-*/
+tests/.ipc-*/
+

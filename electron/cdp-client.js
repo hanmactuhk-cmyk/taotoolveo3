@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
+const { isFlowUrl } = require('./job-utils');
 
 class CdpClient {
   constructor() {
@@ -21,6 +22,7 @@ class CdpClient {
       this.socket = new WebSocket(address, { maxPayload: 16 * 1024 * 1024 });
 
       const timeout = setTimeout(() => {
+        this.socket.terminate();
         reject(new Error('Hết thời gian chờ kết nối WebSocket tới Chrome (8s).'));
       }, 8000);
 
@@ -46,7 +48,9 @@ class CdpClient {
             if (this.trace && msg.method === 'Network.responseReceived') {
               const res = msg.params && msg.params.response;
               if (res && res.status >= 400) {
-                this.trace(`[HTTP] ${res.status} | ${res.url}`);
+                let host = 'unknown';
+                try { host = new URL(res.url).hostname; } catch {}
+                this.trace(`[HTTP] ${res.status} | ${host}`);
               }
             }
           }
@@ -69,7 +73,7 @@ class CdpClient {
     });
   }
 
-  async call(method, params = {}) {
+  async call(method, params = {}, timeoutMs = 35000) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket chưa mở hoặc đã đóng.');
     }
@@ -81,9 +85,9 @@ class CdpClient {
       const timer = setTimeout(() => {
         if (this.callbacks.has(id)) {
           this.callbacks.delete(id);
-          reject(new Error(`Hết thời gian chờ phản hồi CDP lệnh ${method} (35s).`));
+          reject(new Error(`Hết thời gian chờ phản hồi CDP lệnh ${method} (${Math.round(timeoutMs / 1000)}s).`));
         }
-      }, 35000);
+      }, timeoutMs);
 
       this.callbacks.set(id, {
         resolve: (res) => {
@@ -96,7 +100,8 @@ class CdpClient {
         }
       });
 
-      this.socket.send(payload);
+      try { this.socket.send(payload); }
+      catch (error) { clearTimeout(timer); this.callbacks.delete(id); reject(error); }
     });
   }
 
@@ -131,6 +136,10 @@ class CdpClient {
     if (action === 'fill') return await this.fillPrompt(request.prompt);
     if (action === 'submit') return await this.submit(request.jobId, request.prompt);
 
+    const history = await this.call('Page.getNavigationHistory', {});
+    const entry = (history.entries || [])[history.currentIndex];
+    if (!entry || !isFlowUrl(entry.url)) throw new Error('Hoàn tất đăng nhập và mở đúng tab Flow trước khi thao tác.');
+
     const bridgePath = path.resolve(__dirname, '../flow-bridge.js');
     if (!fs.existsSync(bridgePath)) throw new Error('Không tìm thấy tệp flow-bridge.js');
     const sourceCode = fs.readFileSync(bridgePath, 'utf8');
@@ -142,7 +151,7 @@ class CdpClient {
       returnByValue: true,
       awaitPromise: true,
       userGesture: true
-    });
+    }, action === 'finishUpload' ? 100000 : 35000);
 
     if (result.exceptionDetails) {
       throw new Error('Flow thay đổi trang trong lúc thao tác: ' + (result.exceptionDetails.text || 'Lỗi trang'));
@@ -172,6 +181,7 @@ class CdpClient {
             });
             const innerExpr = sourceCode.replace('__FLOWDESK_REQUEST__', JSON.stringify({
               action: 'account',
+              headerPlan: value.headerPlan,
               accountFrame: true
             }));
             const inner = await this.call('Runtime.evaluate', {
@@ -244,13 +254,7 @@ class CdpClient {
     try {
       await this.bridge({ action: 'upload', slot });
 
-      let chooser = this.events.slice().reverse().find(e => e.method === 'Page.fileChooserOpened');
-      if (!chooser) {
-        await this.call('Runtime.evaluate', { expression: '1', returnByValue: true });
-        chooser = this.events.slice().reverse().find(e => e.method === 'Page.fileChooserOpened');
-      }
-
-      if (!chooser) throw new Error('Flow chưa mở bộ chọn tệp.');
+      const chooser = await this.waitForProtocolEvent('Page.fileChooserOpened');
       const backendNodeId = chooser.params && chooser.params.backendNodeId;
       if (!backendNodeId) throw new Error('Chrome chưa cung cấp ô tải tệp.');
 
@@ -273,6 +277,16 @@ class CdpClient {
     if (uploadFailure) throw uploadFailure;
   }
 
+  async waitForProtocolEvent(method, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const event = this.events.slice().reverse().find(item => item.method === method);
+      if (event) return event;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    throw new Error(`Chrome chưa trả sự kiện ${method}; không tải tệp vào tab khác.`);
+  }
+
   dispose() {
     if (this.socket) {
       try {
@@ -284,3 +298,4 @@ class CdpClient {
 }
 
 module.exports = CdpClient;
+

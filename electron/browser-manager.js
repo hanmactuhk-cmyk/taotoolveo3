@@ -2,10 +2,12 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawn, exec } = require('child_process');
+const { isFlowUrl } = require('./job-utils');
 
 class BrowserManager {
   constructor(store) {
     this.store = store;
+    this.controlLocks = new Map();
   }
 
   static findBrowser() {
@@ -59,6 +61,7 @@ class BrowserManager {
   }
 
   async openLogin(account) {
+    if (await this.isOpen(account)) await this.close(account);
     const profile = this.store.profileDir(account);
     const exe = BrowserManager.findBrowser();
     account.LoginStarted = true;
@@ -98,6 +101,15 @@ class BrowserManager {
   }
 
   async enableControl(account) {
+    const previous = this.controlLocks.get(account.Id) || Promise.resolve();
+    const operation = previous.catch(() => {}).then(() => this.ensureControl(account));
+    this.controlLocks.set(account.Id, operation);
+    try { await operation; }
+    finally { if (this.controlLocks.get(account.Id) === operation) this.controlLocks.delete(account.Id); }
+  }
+
+  async ensureControl(account) {
+    if (await this.isOpen(account)) return;
     const profile = this.store.profileDir(account);
     if (BrowserManager.profileInUse(profile)) {
       throw new Error('Đóng cửa sổ Chrome của hồ sơ đã đăng nhập, rồi bấm Kết nối và đọc tài khoản.');
@@ -154,7 +166,7 @@ class BrowserManager {
         const existingPort = parseInt(lines[0], 10);
         if (existingPort >= 1024 && existingPort <= 65535) {
           const v = await this.readHttpJson(existingPort, '/json/version');
-          if (v && v.webSocketDebuggerUrl) {
+          if (v && lines[1] && v.webSocketDebuggerUrl === `ws://127.0.0.1:${existingPort}${lines[1]}`) {
             account.Port = existingPort;
             account.BrowserId = v.webSocketDebuggerUrl;
             this.store.save();
@@ -231,6 +243,68 @@ class BrowserManager {
     account.BrowserId = '';
     this.store.save();
   }
+
+  async waitForFlowPage(client) {
+    const deadline = Date.now() + 25000;
+    while (Date.now() < deadline) {
+      const history = await client.call('Page.getNavigationHistory', {});
+      const entry = (history.entries || [])[history.currentIndex];
+      if (entry && isFlowUrl(entry.url)) {
+        const result = await client.call('Runtime.evaluate', {
+          expression: "document.readyState !== 'loading' && !!document.querySelector('.header-user-button,flow-header-user-icon,.ProseMirror')",
+          returnByValue: true
+        });
+        if (result.result && result.result.value) return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error('Tab của job chưa tải xong Flow sau 25 giây; lệnh chưa được gửi.');
+  }
+
+  async connectFlowTab(account, { projectUrl = '', newTab = false } = {}) {
+    if (projectUrl && !isFlowUrl(projectUrl)) throw new Error('URL dự án Flow không hợp lệ.');
+    await this.enableControl(account);
+    const CdpClient = require('./cdp-client');
+    let pages = await this.readHttpJson(account.Port, '/json/list');
+    let target = (Array.isArray(pages) ? pages : []).find(page => page.type === 'page' &&
+      (projectUrl ? page.url === projectUrl : !newTab && isFlowUrl(page.url)));
+    if (!target) {
+      const control = new CdpClient();
+      let targetId;
+      try {
+        await control.connect(account.BrowserId);
+        const created = await control.call('Target.createTarget', { url: projectUrl || 'https://flow.google.com/' });
+        targetId = created.targetId;
+      } finally { control.dispose(); }
+      for (let attempt = 0; attempt < 40; attempt++) {
+        pages = await this.readHttpJson(account.Port, '/json/list');
+        target = (Array.isArray(pages) ? pages : []).find(page => page.type === 'page' && page.id === targetId);
+        if (target && target.webSocketDebuggerUrl) break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }
+    if (!target || !target.webSocketDebuggerUrl) throw new Error('Không kết nối được đúng tab Flow; không sử dụng tab khác thay thế.');
+    const client = new CdpClient();
+    try {
+      await client.connect(target.webSocketDebuggerUrl);
+      await this.waitForFlowPage(client);
+      return client;
+    } catch (error) { client.dispose(); throw error; }
+  }
+
+  async closeJobTab(account, projectUrl) {
+    if (!projectUrl || !await this.isOpen(account)) return;
+    const pages = await this.readHttpJson(account.Port, '/json/list');
+    const targets = (Array.isArray(pages) ? pages : []).filter(page => page.type === 'page' && page.url === projectUrl);
+    if (targets.length !== 1) return;
+    const CdpClient = require('./cdp-client');
+    const control = new CdpClient();
+    try {
+      await control.connect(account.BrowserId);
+      await control.call('Target.closeTarget', { targetId: targets[0].id });
+    } finally { control.dispose(); }
+  }
 }
 
 module.exports = BrowserManager;
+
