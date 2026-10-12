@@ -1,71 +1,25 @@
-const { app, BrowserWindow, session, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, session, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn, exec } = require('child_process');
-const http = require('http');
+
+const Store = require('./store');
+const BrowserManager = require('./browser-manager');
+const JobRunner = require('./job-runner');
+const CdpClient = require('./cdp-client');
 
 let mainWindow;
+let store;
+let browserManager;
+let jobRunner;
 
-// Đường dẫn thư mục dữ liệu Data/ giống 100% bản gốc FlowDesk
-function getStoreDir() {
-  const appRoot = app.isPackaged ? path.dirname(process.execPath) : process.cwd();
-  const dataDir = path.join(appRoot, 'Data');
-  if (!fs.existsSync(dataDir)) {
-    try {
-      fs.mkdirSync(dataDir, { recursive: true });
-    } catch (e) {
-      return path.join(app.getPath('userData'), 'Data');
-    }
+function sendToRenderer(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
   }
-  return dataDir;
-}
-
-function getAccountsFilePath() {
-  return path.join(getStoreDir(), 'accounts.json');
-}
-
-function getProfilePath(accountId) {
-  const profilesDir = path.join(getStoreDir(), 'Profiles', accountId);
-  if (!fs.existsSync(profilesDir)) {
-    fs.mkdirSync(profilesDir, { recursive: true });
-  }
-  return profilesDir;
-}
-
-// Tìm đường dẫn Google Chrome hoặc Microsoft Edge trên Windows
-function findBrowserPath() {
-  const env = process.env;
-  const programFiles = env['ProgramFiles'] || 'C:\\Program Files';
-  const programFilesX86 = env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-  const localAppData = env['LOCALAPPDATA'] || (env['USERPROFILE'] ? path.join(env['USERPROFILE'], 'AppData\\Local') : 'C:\\Users\\AppData\\Local');
-
-  const possiblePaths = [
-    // 64-bit Google Chrome
-    path.join(programFiles, 'Google\\Chrome\\Application\\chrome.exe'),
-    // 32-bit Google Chrome
-    path.join(programFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
-    // User LocalAppData Chrome
-    path.join(localAppData, 'Google\\Chrome\\Application\\chrome.exe'),
-    // 64-bit Microsoft Edge
-    path.join(programFiles, 'Microsoft\\Edge\\Application\\msedge.exe'),
-    // 32-bit Microsoft Edge
-    path.join(programFilesX86, 'Microsoft\\Edge\\Application\\msedge.exe'),
-    // User LocalAppData Edge
-    path.join(localAppData, 'Microsoft\\Edge\\Application\\msedge.exe')
-  ];
-
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      return p;
-    }
-  }
-  return null;
 }
 
 function createWindow() {
-  // Session cố định chống reCAPTCHA và lưu cookies Google Flow
   const ses = session.fromPartition('persist:flowdesk_main', { cache: true });
-
   const preloadPath = path.join(__dirname, 'preload.js');
 
   mainWindow = new BrowserWindow({
@@ -79,13 +33,12 @@ function createWindow() {
       preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,               // Khắc phục lỗi màn hình đen khi nạp module qua file://
+      webSecurity: false,               // Khắc phục lỗi nạp file:// module CORS gây màn hình đen
       allowRunningInsecureContent: true,
       session: ses
     }
   });
 
-  // Tìm tệp giao diện index.html của Vite
   const candidateIndexPaths = [
     path.join(__dirname, '../dist/index.html'),
     path.join(app.getAppPath(), 'dist/index.html'),
@@ -96,7 +49,7 @@ function createWindow() {
   let loaded = false;
   for (const p of candidateIndexPaths) {
     if (fs.existsSync(p)) {
-      console.log('[Electron] Tải giao diện từ:', p);
+      console.log('[Electron] Nạp giao diện từ:', p);
       mainWindow.loadFile(p);
       loaded = true;
       break;
@@ -104,13 +57,11 @@ function createWindow() {
   }
 
   if (!loaded) {
-    console.log('[Electron] Không tìm thấy file dist/index.html, thử kết nối http://localhost:3000');
+    console.log('[Electron] Tải từ http://localhost:3000');
     mainWindow.loadURL('http://localhost:3000');
   }
 
-  // Xử lý khi tải trang thất bại -> Hiển thị thông báo thay vì để màn hình đen thui
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    console.error('[Electron] Tải thất bại:', errorCode, errorDescription, validatedURL);
     if (validatedURL && validatedURL.includes('localhost:3000')) {
       mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
         <!DOCTYPE html>
@@ -119,20 +70,18 @@ function createWindow() {
             <meta charset="utf-8" />
             <title>FlowDesk Studio</title>
             <style>
-              body { background: #131924; color: #E2E8F0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-              .card { background: #1C2534; padding: 36px; border-radius: 12px; border: 1px solid #2B374B; max-width: 520px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-              h2 { color: #38BDF8; margin-top: 0; font-size: 20px; }
+              body { background: #131924; color: #E2E8F0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+              .card { background: #1C2534; padding: 36px; border-radius: 12px; border: 1px solid #2B374B; max-width: 500px; text-align: center; }
+              h2 { color: #38BDF8; margin-top: 0; }
               p { color: #94A3B8; font-size: 14px; line-height: 1.6; }
-              .btn { background: #0284C7; color: white; border: none; padding: 10px 22px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 16px; font-size: 14px; }
-              .btn:hover { background: #0369A1; }
+              button { background: #0284C7; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 16px; }
             </style>
           </head>
           <body>
             <div class="card">
-              <h2>FlowDesk Studio • Đang khởi chạy</h2>
-              <p>Ứng dụng chưa tìm thấy thư mục <code>dist/index.html</code> hoặc máy chủ dev chưa bật.</p>
-              <p>Vui lòng chạy lệnh <code>npm run build</code> trước khi mở ứng dụng.</p>
-              <button class="btn" onclick="location.reload()">Thử tải lại</button>
+              <h2>FlowDesk Studio</h2>
+              <p>Chưa tìm thấy <code>dist/index.html</code>. Hãy chạy <code>npm run build</code> trước khi khởi chạy ứng dụng.</p>
+              <button onclick="location.reload()">Thử tải lại</button>
             </div>
           </body>
         </html>
@@ -143,139 +92,228 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
 }
 
-// Khởi chạy Chrome thực tế trên Windows giữ 100% cơ chế cũ của FlowDesk
-ipcMain.handle('open-chrome-profile', async (event, { accountId, mode, port }) => {
-  const profileDir = getProfilePath(accountId);
-  const targetUrl = 'https://labs.google/fx/tools/flow';
+function registerIpc() {
+  // Store
+  ipcMain.handle('store:get', async () => {
+    return store.data;
+  });
 
-  let args = [];
-  if (mode === 'control') {
-    // Chế độ điều khiển tự động qua CDP WebSocket
-    args = [
-      `--user-data-dir=${profileDir}`,
-      `--remote-debugging-address=127.0.0.1`,
-      `--remote-debugging-port=${port || 0}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-blink-features=AutomationControlled',
-      '--exclude-switches=enable-automation',
-      '--disable-infobars',
-      '--new-window',
-      targetUrl
-    ];
-  } else {
-    // Chế độ đăng nhập Chrome thường (cơ chế cũ: mở Chrome với hồ sơ riêng để đăng nhập)
-    args = [
-      `--user-data-dir=${profileDir}`,
-      '--disable-blink-features=AutomationControlled',
-      '--exclude-switches=enable-automation',
-      '--disable-infobars',
-      '--new-window',
-      targetUrl
-    ];
-  }
-
-  const browserExe = findBrowserPath();
-
-  if (browserExe) {
-    try {
-      console.log(`[Chrome] Khởi chạy: "${browserExe}" ${args.join(' ')}`);
-      const proc = spawn(browserExe, args, {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false
-      });
-      proc.unref();
-      return { success: true, profileDir, exe: browserExe, method: 'spawn' };
-    } catch (err) {
-      console.error('[Chrome] Lỗi spawn:', err);
+  ipcMain.handle('store:select-folder', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Chọn thư mục lưu kết quả',
+      defaultPath: store.data.OutputFolder,
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (!result.canceled && result.filePaths.length > 0) {
+      store.data.OutputFolder = result.filePaths[0];
+      store.save();
+      return store.data.OutputFolder;
     }
-  }
+    return null;
+  });
 
-  // Fallback 1: Dùng lệnh start của cmd để Windows tự định vị Chrome
-  try {
-    const cmd = `start "" chrome ${args.map(a => `"${a}"`).join(' ')}`;
-    console.log('[Chrome] Fallback cmd:', cmd);
-    exec(cmd, { windowsHide: false });
-    return { success: true, profileDir, method: 'cmd-chrome' };
-  } catch (cmdErr) {
-    // Fallback 2: Thử mở bằng msedge
-    try {
-      const edgeCmd = `start "" msedge ${args.map(a => `"${a}"`).join(' ')}`;
-      exec(edgeCmd, { windowsHide: false });
-      return { success: true, profileDir, method: 'cmd-edge' };
-    } catch (edgeErr) {
-      return {
-        success: false,
-        error: 'Không tìm thấy Google Chrome hoặc Microsoft Edge trên máy: ' + edgeErr.message
-      };
+  ipcMain.handle('store:open-folder', async (event, folderPath) => {
+    const target = folderPath || store.data.OutputFolder;
+    if (fs.existsSync(target)) {
+      shell.openPath(target);
+      return { success: true };
     }
-  }
-});
+    return { success: false, error: 'Thư mục không tồn tại.' };
+  });
 
-// Mở cửa sổ đăng nhập bên trong Electron (phương án dự phòng khi máy không có Chrome)
-ipcMain.handle('open-login-window', async (event, accountId) => {
-  const ses = session.fromPartition(`persist:account_${accountId}`, { cache: true });
+  // Accounts
+  ipcMain.handle('account:create', async () => {
+    const nextNum = store.data.Accounts.length + 1;
+    const newAcc = {
+      Id: `acc_${nextNum.toString().padStart(2, '0')}`,
+      Name: `Tài khoản ${nextNum.toString().padStart(2, '0')}`,
+      Email: '',
+      Plan: 'Unknown',
+      Credits: null,
+      Status: 'Chờ đăng nhập',
+      Enabled: true,
+      Images: true,
+      Videos: true,
+      LoginStarted: false,
+      LoginMode: true,
+      Port: 0,
+      BrowserId: '',
+      CheckedUtc: null
+    };
+    store.data.Accounts.push(newAcc);
+    store.profileDir(newAcc);
+    store.save();
+    return newAcc;
+  });
 
-  const loginWin = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    title: `Đăng nhập Google Flow - Hồ sơ ${accountId}`,
-    webPreferences: {
-      session: ses,
-      nodeIntegration: false,
-      contextIsolation: true
+  ipcMain.handle('account:open-login', async (event, accountId) => {
+    const acc = store.data.Accounts.find(a => a.Id === accountId);
+    if (!acc) throw new Error('Không tìm thấy tài khoản.');
+    return await browserManager.openLogin(acc);
+  });
+
+  ipcMain.handle('account:check', async (event, accountId) => {
+    const acc = store.data.Accounts.find(a => a.Id === accountId);
+    if (!acc) throw new Error('Không tìm thấy tài khoản.');
+
+    sendToRenderer('log', `[Account] Bắt đầu kết nối CDP kiểm tra tài khoản ${acc.Name}...`);
+    await browserManager.enableControl(acc);
+
+    const cdp = new CdpClient();
+    try {
+      await cdp.connect(acc.BrowserId);
+      await cdp.enableDiagnostics();
+
+      const data = await cdp.bridge({ action: 'account' });
+      if (!data || !data.email) throw new Error('Flow chưa trả email.');
+
+      acc.Email = data.email;
+      acc.Plan = data.plan;
+      acc.Credits = data.credits;
+      acc.Evidence = data.evidence || '';
+      acc.CheckedUtc = new Date().toISOString();
+      acc.Status = acc.Plan === 'Unknown' || acc.Credits === null ?
+        'Đã đọc email; gói/credit chưa rõ' :
+        'Hoạt động — đã xác minh từ Flow';
+
+      store.save();
+      sendToRenderer('account-updated', acc);
+      sendToRenderer('log', `[Account] Đã xác minh: ${acc.Email} | Gói: ${acc.Plan} | Credits: ${acc.Credits}`);
+      return { success: true, account: acc };
+    } finally {
+      cdp.dispose();
     }
   });
 
-  loginWin.loadURL('https://labs.google/fx/tools/flow');
-  return { success: true };
-});
-
-// Đọc danh sách tài khoản từ file accounts.json
-ipcMain.handle('get-accounts', async () => {
-  const filePath = getAccountsFilePath();
-  if (fs.existsSync(filePath)) {
-    try {
-      const raw = fs.readFileSync(filePath, 'utf8');
-      const data = JSON.parse(raw);
-      return data.Accounts || [];
-    } catch (e) {
-      return [];
-    }
-  }
-  return [];
-});
-
-// Lưu danh sách tài khoản vào file accounts.json
-ipcMain.handle('save-accounts', async (event, accounts) => {
-  const filePath = getAccountsFilePath();
-  try {
-    let data = { Accounts: accounts, Jobs: [], Queue: [] };
-    if (fs.existsSync(filePath)) {
-      try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        const old = JSON.parse(raw);
-        data = { ...old, Accounts: accounts };
-      } catch (e) {}
-    }
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  ipcMain.handle('account:close', async (event, accountId) => {
+    const acc = store.data.Accounts.find(a => a.Id === accountId);
+    if (acc) await browserManager.close(acc);
     return { success: true };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-});
+  });
 
-// Mở thư mục kết quả
-ipcMain.handle('open-folder', async (event, folderPath) => {
-  if (folderPath && fs.existsSync(folderPath)) {
-    shell.openPath(folderPath);
+  ipcMain.handle('account:delete', async (event, accountId) => {
+    store.data.Accounts = store.data.Accounts.filter(a => a.Id !== accountId);
+    store.save();
     return { success: true };
-  }
-  return { success: false, error: 'Thư mục không tồn tại' };
-});
+  });
+
+  ipcMain.handle('account:update-perms', async (event, { accountId, perms }) => {
+    const acc = store.data.Accounts.find(a => a.Id === accountId);
+    if (acc) {
+      if (perms.Enabled !== undefined) acc.Enabled = perms.Enabled;
+      if (perms.Images !== undefined) acc.Images = perms.Images;
+      if (perms.Videos !== undefined) acc.Videos = perms.Videos;
+      store.save();
+    }
+    return { success: true };
+  });
+
+  // Queue & Jobs
+  ipcMain.handle('queue:sync-prompts', async (event, { kind, prompts, model, ratio, count, mode, references, accountId }) => {
+    const drafts = store.data.Queue.filter(q => q.Kind === kind && q.AutoDraft && !q.Submitted && q.State === 'Hàng đợi');
+
+    for (let i = 0; i < prompts.length; i++) {
+      const text = prompts[i];
+      if (i < drafts.length) {
+        drafts[i].Prompt = text;
+        drafts[i].Model = model;
+        drafts[i].Ratio = ratio;
+        drafts[i].Count = count;
+        drafts[i].Mode = mode;
+        drafts[i].References = references || [];
+        if (accountId && accountId !== 'auto') drafts[i].AccountId = accountId;
+      } else {
+        const newJob = {
+          Id: 'job_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+          Kind: kind,
+          Mode: mode,
+          Model: model,
+          Ratio: ratio,
+          Count: count,
+          Prompt: text,
+          References: references || [],
+          StartImage: null,
+          EndImage: null,
+          State: 'Hàng đợi',
+          Note: 'Bản nháp tự động',
+          AccountId: accountId === 'auto' ? '' : (accountId || ''),
+          Folder: '',
+          Progress: null,
+          Results: [],
+          Submitted: false,
+          AutoDraft: true,
+          Attempts: []
+        };
+        store.data.Queue.push(newJob);
+      }
+    }
+
+    // Xóa các hàng thừa nếu người dùng xóa bớt prompt
+    for (let i = prompts.length; i < drafts.length; i++) {
+      const idx = store.data.Queue.indexOf(drafts[i]);
+      if (idx !== -1) store.data.Queue.splice(idx, 1);
+    }
+
+    store.save();
+    return store.data.Queue;
+  });
+
+  ipcMain.handle('queue:update-job', async (event, updatedJob) => {
+    const job = store.data.Queue.find(q => q.Id === updatedJob.Id);
+    if (job) {
+      if (job.State === 'Đang chạy') {
+        // Nếu đang chạy, prompt sửa sẽ chỉ áp dụng cho lần chạy tiếp theo
+        job.Prompt = updatedJob.Prompt;
+      } else {
+        Object.assign(job, updatedJob);
+      }
+      store.save();
+    }
+    return { success: true };
+  });
+
+  ipcMain.handle('queue:delete-job', async (event, jobId) => {
+    store.data.Queue = store.data.Queue.filter(q => q.Id !== jobId);
+    store.save();
+    return { success: true };
+  });
+
+  ipcMain.handle('queue:retry-job', async (event, jobId) => {
+    jobRunner.retryJob(jobId);
+    return { success: true };
+  });
+
+  ipcMain.handle('queue:clear-completed', async (event, kind) => {
+    store.data.Queue = store.data.Queue.filter(q => !(q.Kind === kind && q.State === 'Hoàn tất'));
+    store.save();
+    return store.data.Queue;
+  });
+
+  // Runner controls
+  ipcMain.handle('runner:start', async (event, options) => {
+    jobRunner.runQueue(options);
+    return { success: true };
+  });
+
+  ipcMain.handle('runner:pause', async () => {
+    jobRunner.pause();
+    return { success: true, paused: jobRunner.paused };
+  });
+
+  ipcMain.handle('runner:stop', async () => {
+    jobRunner.stop();
+    return { success: true };
+  });
+}
 
 app.whenReady().then(() => {
+  store = new Store();
+  browserManager = new BrowserManager(store);
+  jobRunner = new JobRunner(store, browserManager, (event, data) => {
+    sendToRenderer(event, data);
+  });
+
+  registerIpc();
   createWindow();
 
   app.on('activate', () => {
