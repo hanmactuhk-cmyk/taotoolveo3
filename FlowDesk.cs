@@ -1577,14 +1577,178 @@ namespace FlowDesk
             store.Save();
             return StartRun();
         }
-        Task RunSelected()
-        {
-            return StartRun();
-        }
         Task StartRun()
         {
             SyncDrafts();
-            return Task.FromResult(0);
+            return ExecuteQueue(null);
+        }
+        async Task ExecuteQueue(HashSet<string> only)
+        {
+            if(running)return;
+            var rows=store.Data.Queue.Where(q=>q.Kind==activeKind&&q.State=="Hàng đợi"&&(only==null||only.Contains(q.Id))).ToList();
+            if(rows.Count==0)throw new Exception("Không có tác vụ đang chờ.");
+            foreach(var draft in store.Data.Queue.Where(x=>x.Kind==activeKind&&x.AutoDraft))draft.AutoDraft=false;
+            refreshing=true;
+            prompts.Clear();
+            refreshing=false;
+            running=true;
+            paused=false;
+            stop=false;
+            foreach(var e in editControls)e.Enabled=false;
+            var workers=new List<Task>();
+            int limit=1;
+            Int32.TryParse(concurrent.Text, out limit);
+            if (limit <= 0) limit = 1;
+            try
+            {
+                foreach(var q in rows)
+                {
+                    while(!stop&&(paused||workers.Count>=limit))
+                    {
+                        if(workers.Count>0)
+                        {
+                            await Task.WhenAny(workers.Concat(new[]{ Task.Delay(250) }));
+                            workers.RemoveAll(t=>t.IsCompleted);
+                        }
+                        else await Task.Delay(250);
+                    }
+                    if(stop)break;
+                    var available=store.Data.Accounts.Where(a=>JobPolicy.Eligible(a,q)).OrderByDescending(a=>a.CheckedUtc).ToList();
+                    while(available.Count==0&&workers.Count>0&&!stop)
+                    {
+                        await Task.WhenAny(workers);
+                        workers.RemoveAll(t=>t.IsCompleted);
+                        available=store.Data.Accounts.Where(a=>JobPolicy.Eligible(a,q)).ToList();
+                    }
+                    if(stop)break;
+                    if(available.Count==0)
+                    {
+                        q.State="Lỗi";
+                        q.Note="Không có hồ sơ được bật cho tác vụ này.";
+                        store.Save();
+                        continue;
+                    }
+                    var selectedAccount=available.FirstOrDefault(x=>!String.IsNullOrEmpty(x.Email))??available[0];
+                    workers.Add(ProcessTask(q,selectedAccount));
+                }
+                await Task.WhenAll(workers);
+            }
+            finally
+            {
+                running=false;
+                active=0;
+                leased.Clear();
+                foreach(var e in editControls)e.Enabled=true;
+                pauseButton.Text="TẠM DỪNG";
+                store.Save();
+                RefreshQueue();
+            }
+        }
+        async Task ProcessTask(StudioTask q,Account a)
+        {
+            active++;
+            q.AutoDraft=false;
+            q.SentPrompt=q.Prompt;
+            q.State="Đang chạy";
+            q.AccountId=a.Id;
+            RefreshQueue();
+            try
+            {
+                DateTime until;
+                if(cooldowns.TryGetValue(a.Id,out until)&&until>DateTime.UtcNow)await Task.Delay(until-DateTime.UtcNow);
+                using(var c=await browser.ConnectJob(a,q.Url))
+                {
+                    c.Trace=message=>status.Text=("[Job "+q.Id.Substring(0,6)+"]["+a.Name+"] "+message);
+                    await c.EnableDiagnostics();
+                    await AccountRefresh.Read(store,browser,a);
+                    var catalog=await c.Bridge(new{ action="catalog",kind=q.Kind });
+                    q.Url=Json.Text(await c.Bridge(new{ action="status" }),"url");
+                    store.Save();
+                    var names=Json.Array(catalog,"models").Where(x=>!Json.Bool(x,"disabled")).Select(x=>Json.Text(x,"name")).ToArray();
+                    string actual=ModelMatch.Resolve(names,q.Model);
+                    if(actual==null)throw new Exception("Model '"+q.Model+"' không có hoặc bị khóa.");
+                    q.Model=actual;
+                    var s=await c.Bridge(new{ action="configure",kind=q.Kind,model=actual });
+                    var options=new List<object>();
+                    foreach(var field in Json.Array(s,"fields"))
+                    {
+                        var name=Json.Text(field,"name");
+                        var opts=Json.Array(field,"options").Where(o=>!Json.Bool(o,"disabled")).Select(o=>Json.Text(o,"name")).ToArray();
+                        string target=null;
+                        if(opts.Contains(q.Ratio))target=q.Ratio;
+                        else if(opts.Contains(q.Count))target=q.Count;
+                        if(target!=null)options.Add(new{ name=name,value=target });
+                    }
+                    s=await c.Bridge(new{ action="configure",kind=q.Kind,fields=options.ToArray() });
+                    var policy=Policy.Check(a,Json.Number(s,"cost"),true,DateTime.UtcNow);
+                    if(policy.Length>0)throw new Exception(policy);
+                    await c.Bridge(new{ action="fill",prompt=JobRevision.RunningPrompt(q) });
+                    if(JobFiles(q).Length>0)
+                    {
+                        await UploadJobImages(c,q);
+                    }
+                    await SubmitAndMonitor(c,q,a,s);
+                }
+            }
+            catch(Exception e)
+            {
+                q.State="Lỗi";
+                q.Note=e.GetBaseException().Message;
+            }
+            finally
+            {
+                store.Save();
+                active--;
+                leased.Remove(a.Id);
+                RefreshQueue();
+                cooldowns[a.Id]=DateTime.UtcNow.AddSeconds(10);
+            }
+        }
+        string[] JobFiles(StudioTask q)
+        {
+            return q.References.Concat(new[]{ q.StartImage,q.EndImage }).Where(x=>!String.IsNullOrWhiteSpace(x)).Distinct().ToArray();
+        }
+        async Task UploadJobImages(Cdp c,StudioTask q)
+        {
+            if(!String.IsNullOrWhiteSpace(q.StartImage))await c.UploadImage(q.StartImage,"start");
+            if(!String.IsNullOrWhiteSpace(q.EndImage))await c.UploadImage(q.EndImage,"end");
+            foreach(var path in q.References)await c.UploadImage(path,"reference");
+        }
+        async Task SubmitAndMonitor(Cdp c,StudioTask q,Account a,object settings)
+        {
+            q.Folder=Path.Combine(store.Data.OutputFolder,q.Kind,q.Id.Substring(0,8));
+            Directory.CreateDirectory(q.Folder);
+            q.State="Đang gửi";
+            q.Submitted=true;
+            store.Save();
+            await c.Bridge(new{ action="submit",prompt=JobRevision.RunningPrompt(q),jobId=JobRevision.ExecutionKey(q) });
+            q.State="Đang chạy";
+            store.Save();
+            await Monitor(c,q);
+        }
+        async Task Monitor(Cdp c,StudioTask q)
+        {
+            var deadline=DateTime.UtcNow.AddMinutes(15);
+            while(DateTime.UtcNow<deadline)
+            {
+                var d=await c.Bridge(new{ action="jobStatus",prompt=JobRevision.RunningPrompt(q),baseline=q.Baseline,kind=q.Kind });
+                q.Progress=Json.Number(d,"progress");
+                q.Note=Json.Text(d,"message");
+                var error=Json.Text(d,"error");
+                if(error.Length>0)throw new Exception(error);
+                var urls=Json.Array(d,"urls").Select(Convert.ToString).Distinct().ToArray();
+                if(urls.Length>0)
+                {
+                    q.State="Hoàn tất";
+                    q.Progress=100;
+                    store.Save();
+                    RefreshQueue();
+                    return;
+                }
+                store.Save();
+                RefreshQueue();
+                await Task.Delay(3000);
+            }
         }
         Task Inspect()
         {

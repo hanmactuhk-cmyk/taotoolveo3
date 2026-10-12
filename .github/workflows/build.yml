@@ -1,4 +1,4 @@
-name: Build FlowDesk.exe
+name: Build FlowDesk Electron (.exe)
 
 on:
   push:
@@ -15,16 +15,23 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
 
-    - name: Build FlowDesk.exe
-      shell: cmd
+    - name: Install Dependencies
       run: |
-        build.cmd
+        npm install
+        npm install --save-dev electron electron-builder
 
-    - name: Upload FlowDesk.exe Artifact
+    - name: Build React & Package Electron (.exe)
+      run: |
+        npx vite build
+        npx electron-builder --win --x64
+
+    - name: Upload FlowDesk Setup (.exe)
       uses: actions/upload-artifact@v4
       with:
-        name: FlowDesk-Windows-Executable
-        path: FlowDesk.exe
+        name: FlowDesk-Electron-Installer
+        path: dist-electron/*.exe
