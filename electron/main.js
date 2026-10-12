@@ -8,6 +8,8 @@ function createWindow() {
   // Tạo session cố định để lưu giữ cookie đăng nhập Google Flow và vượt reCAPTCHA
   const ses = session.fromPartition('persist:flowdesk_main', { cache: true });
 
+  const preloadPath = path.join(__dirname, 'preload.js');
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -16,7 +18,7 @@ function createWindow() {
     title: 'FlowDesk Studio • Desktop Edition',
     backgroundColor: '#131924',
     webPreferences: {
-      preload: path.join(__dirname, 'electron/preload.js'),
+      preload: fs.existsSync(preloadPath) ? preloadPath : path.join(__dirname, 'electron/preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       session: ses
@@ -28,9 +30,14 @@ function createWindow() {
     callback({ responseHeaders: details.responseHeaders });
   });
 
-  // Load app từ thư mục dist (sau khi build React/Vite)
-  if (app.isPackaged || process.env.NODE_ENV === 'production') {
-    mainWindow.loadFile(path.join(__dirname, 'dist/index.html'));
+  // Tìm đường dẫn file index.html được build bởi Vite
+  const indexPathLocal = path.join(__dirname, '../dist/index.html');
+  const indexPathPackaged = path.join(app.getAppPath(), 'dist/index.html');
+
+  if (fs.existsSync(indexPathPackaged)) {
+    mainWindow.loadFile(indexPathPackaged);
+  } else if (fs.existsSync(indexPathLocal)) {
+    mainWindow.loadFile(indexPathLocal);
   } else {
     mainWindow.loadURL('http://localhost:3000');
   }
