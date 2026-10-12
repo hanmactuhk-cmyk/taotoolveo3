@@ -19,8 +19,9 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Build FlowDesk.exe
+      shell: cmd
       run: |
-        call build.cmd
+        build.cmd
 
     - name: Upload FlowDesk.exe Artifact
       uses: actions/upload-artifact@v4
