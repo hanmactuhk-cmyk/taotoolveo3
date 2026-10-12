@@ -109,15 +109,52 @@ class CdpClient {
     await this.call('Network.enable', {});
     await this.call('Page.enable', {});
 
-    // STEALTH & ANTI-BOT: Chuẩn hóa ẩn dấu vết tự động hóa
-    // Không giả mạo PluginArray thô thiển ([1,2,3,4,5]) hay ghi đè window.chrome gốc,
-    // tránh kích hoạt cảnh báo "tiện ích mở rộng sửa đổi trang" của Google Flow/reCAPTCHA
+    // STEALTH & ANTI-BOT: Advanced anti-detection patches for Google reCAPTCHA Enterprise
     await this.call('Page.addScriptToEvaluateOnNewDocument', {
       source: `
         try {
-          if ('webdriver' in navigator) {
-            delete Object.getPrototypeOf(navigator).webdriver;
-            delete navigator.webdriver;
+          Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined,
+            configurable: true
+          });
+        } catch(e) {}
+
+        try {
+          if (!window.chrome) {
+            window.chrome = {
+              app: { isInstalled: false },
+              webstore: { onInstallStageChanged: {}, onDownloadProgress: {} },
+              runtime: {
+                OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', UPDATE: 'update' },
+                OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+                connect: function() {},
+                sendMessage: function() {}
+              }
+            };
+          }
+        } catch(e) {}
+
+        try {
+          Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'], configurable: true });
+          Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
+          Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+          Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
+        } catch(e) {}
+
+        try {
+          const getParameterOriginal = WebGLRenderingContext.prototype.getParameter;
+          WebGLRenderingContext.prototype.getParameter = function(parameter) {
+            if (parameter === 37445) return 'Google Inc. (NVIDIA)';
+            if (parameter === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+            return getParameterOriginal.apply(this, arguments);
+          };
+          if (typeof WebGL2RenderingContext !== 'undefined') {
+            const getParameterOriginal2 = WebGL2RenderingContext.prototype.getParameter;
+            WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+              if (parameter === 37445) return 'Google Inc. (NVIDIA)';
+              if (parameter === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+              return getParameterOriginal2.apply(this, arguments);
+            };
           }
         } catch(e) {}
 
@@ -130,7 +167,7 @@ class CdpClient {
     });
 
     const version = await this.call('Browser.getVersion', {});
-    if (this.trace) this.trace(`[Browser] ${version.product} (Stealth Mode Active)`);
+    if (this.trace) this.trace(`[Browser] ${version.product} (Advanced Stealth & Anti-Bot Active)`);
   }
 
   async clearCaptchaSession() {
@@ -294,16 +331,24 @@ class CdpClient {
     const x = Number(point.x);
     const y = Number(point.y);
 
-    await this.call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
-    await this.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+    await this.humanClick(x, y);
+    await new Promise(r => setTimeout(r, 120 + Math.floor(Math.random() * 150)));
 
     // Ctrl + A để xóa prompt cũ
     await this.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
     await this.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    await new Promise(r => setTimeout(r, 60 + Math.floor(Math.random() * 60)));
 
-    // Gõ nội dung mới
-    await this.call('Input.insertText', { text: prompt });
+    // Gõ nội dung mới mô phỏng người thật gõ theo cụm ký tự với độ trễ ngẫu nhiên
+    const textToType = String(prompt || '');
+    for (let i = 0; i < textToType.length; i += 3) {
+      const chunk = textToType.slice(i, i + 3);
+      await this.call('Input.insertText', { text: chunk });
+      const delay = 25 + Math.floor(Math.random() * 55);
+      await new Promise(r => setTimeout(r, delay));
+    }
 
+    await new Promise(r => setTimeout(r, 200 + Math.floor(Math.random() * 200)));
     return await this.bridge({ action: 'confirmFill', prompt });
   }
 

@@ -55,6 +55,16 @@ class BrowserManager {
       '--disable-blink-features=AutomationControlled',
       '--exclude-switches=enable-automation',
       '--disable-infobars',
+      '--disable-gpu-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--no-default-browser-check',
+      '--no-first-run',
+      '--password-store=basic',
+      '--use-mock-keychain',
       '--new-window',
       'https://labs.google/fx/tools/flow'
     ];
@@ -189,6 +199,14 @@ class BrowserManager {
       '--disable-blink-features=AutomationControlled',
       '--exclude-switches=enable-automation',
       '--disable-infobars',
+      '--disable-gpu-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--password-store=basic',
+      '--use-mock-keychain',
       '--new-window',
       'https://labs.google/fx/tools/flow'
     ];
