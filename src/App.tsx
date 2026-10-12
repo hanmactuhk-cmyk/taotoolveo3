@@ -98,9 +98,11 @@ export default function App() {
   const [delay, setDelay] = useState<string>('10–20 giây');
   const [mode, setMode] = useState<string>('Văn bản / Khung hình → Video');
   const [selectedAccountId, setSelectedAccountId] = useState<string>('auto');
-  const [promptsText, setPromptsText] = useState<string>(
-    'Cận cảnh xe hơi thể thao chạy tốc độ cao qua hẻm núi lúc hoàng hôn, ánh sáng rực rỡ, điện ảnh 4k\n\nRobot tương lai đang vẽ tranh nghệ thuật trong phòng thí nghiệm ánh đèn neon lung linh'
-  );
+  const [promptsText, setPromptsText] = useState<string>('');
+  const draftInputs = useRef<Record<string, string>>({ video: '', image: '' });
+  const [storeReady, setStoreReady] = useState(false);
+  const [catalogs, setCatalogs] = useState<Record<string, Array<{name: string; disabled?: boolean}>>>({});
+  const [imagePreviews, setImagePreviews] = useState<Record<string, string>>({});
   const [splitMode, setSplitMode] = useState<string>('Đoạn trống / 1 prompt');
   const [samePrompt, setSamePrompt] = useState<boolean>(false);
   const [outputFolder, setOutputFolder] = useState<string>('C:\\FlowDesk\\Results');
@@ -137,6 +139,14 @@ export default function App() {
           if (Array.isArray(storeData.Accounts)) setAccounts(storeData.Accounts);
           if (Array.isArray(storeData.Queue)) setQueue(storeData.Queue);
           if (storeData.OutputFolder) setOutputFolder(storeData.OutputFolder);
+          for (const kind of ['video', 'image']) {
+            draftInputs.current[kind] = (storeData.Queue || []).filter((job: StudioTask) =>
+              job.Kind === kind && job.AutoDraft && !job.Submitted && job.State === 'Hàng đợi').map((job: StudioTask) => job.Prompt).join('\n\n');
+          }
+          setPromptsText(draftInputs.current.video);
+          const first = (storeData.Queue || []).find((job: StudioTask) => job.Kind === 'video' && job.AutoDraft);
+          if (first) { setModel(first.Model); setRatio(first.Ratio); setCount(first.Count); setMode(first.Mode); setSelectedAccountId(first.AccountId || 'auto'); }
+          setStoreReady(true);
         }
       }).catch((e: any) => console.error(e));
 
@@ -147,6 +157,9 @@ export default function App() {
         const isStillRunning = q.some(item => item.State === 'Đang chạy' || item.State === 'Đang gửi');
         setRunning(isStillRunning);
       });
+      const unsubRunner = api.onEvent('runner-status', (state: any) => {
+        setRunning(state.running); setPaused(state.paused);
+      });
       const unsubAcc = api.onEvent('account-updated', (updatedAcc: Account) => {
         setAccounts(prev => prev.map(a => a.Id === updatedAcc.Id ? updatedAcc : a));
       });
@@ -155,12 +168,14 @@ export default function App() {
         if (unsubLog) unsubLog();
         if (unsubQueue) unsubQueue();
         if (unsubAcc) unsubAcc();
+        if (unsubRunner) unsubRunner();
       };
-    }
+    } else { setStoreReady(true); }
   }, []);
 
   // Tự động tách prompt thành các hàng job khi người dùng gõ
   useEffect(() => {
+    if ((window as any).electronAPI && !storeReady) return;
     const lines = splitMode === 'Đoạn trống / 1 prompt'
       ? promptsText.replace(/\r/g, '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean)
       : promptsText.replace(/\r/g, '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -175,6 +190,7 @@ export default function App() {
         count,
         mode,
         references,
+        samePrompt,
         accountId: selectedAccountId
       }).then((newQueue: StudioTask[]) => {
         if (newQueue) setQueue(newQueue);
@@ -205,7 +221,7 @@ export default function App() {
         return [...locked, ...drafts];
       });
     }
-  }, [promptsText, splitMode, activeKind, model, ratio, count, mode, references, selectedAccountId]);
+  }, [promptsText, splitMode, activeKind, model, ratio, count, mode, references, selectedAccountId, samePrompt, storeReady]);
 
   // Điều khiển chạy hàng chờ
   const handleStartRun = () => {
@@ -215,7 +231,9 @@ export default function App() {
 
     const api = (window as any).electronAPI;
     if (api && api.startQueue) {
-      api.startQueue({ concurrent, delay }).catch((err: any) => {
+      api.startQueue({ concurrent, delay, kind: activeKind }).then(() => {
+        draftInputs.current[activeKind] = ''; setPromptsText('');
+      }).catch((err: any) => {
         addLog(`[Lỗi] ${err.message}`);
         setRunning(false);
       });
@@ -255,7 +273,7 @@ export default function App() {
               if (t3) {
                 t3.State = 'Hoàn tất';
                 t3.Progress = 100;
-                t3.Note = 'Đã tải kết quả thành công.';
+                t3.Note = '[Mô phỏng] Không có tệp media thật.';
                 t3.Results = [`${t3.Folder}\\result-1.mp4`];
               }
               return qNext;
@@ -293,7 +311,7 @@ export default function App() {
   const handleRetryJob = (jobId: string) => {
     const api = (window as any).electronAPI;
     if (api && api.retryJob) {
-      api.retryJob(jobId);
+      api.retryJob(jobId).catch((error: any) => addLog(error.message));
     } else {
       setQueue(prev => prev.map(q => {
         if (q.Id === jobId) {
@@ -315,7 +333,8 @@ export default function App() {
   const handleDeleteJob = (jobId: string) => {
     const api = (window as any).electronAPI;
     if (api && api.deleteJob) {
-      api.deleteJob(jobId);
+      api.deleteJob(jobId).then(() => setQueue(prev => prev.filter(q => q.Id !== jobId))).catch((error: any) => addLog(error.message));
+      return;
     }
     setQueue(prev => prev.filter(q => q.Id !== jobId));
     addLog(`[Job] Đã xóa tác vụ ${jobId.slice(0, 8)}.`);
@@ -364,16 +383,44 @@ export default function App() {
       setTimeout(() => {
         setAccounts(prev => prev.map(a => a.Id === accId ? {
           ...a,
-          Email: 'hoaihkht1994@gmail.com',
+          Email: 'demo@example.invalid',
           Plan: 'Pro',
           Credits: 450,
-          Status: 'Hoạt động — đã xác minh từ Flow',
+          Status: 'Mô phỏng giao diện — chưa xác minh Flow',
           CheckedUtc: new Date().toISOString()
         } : a));
-        addLog('[Preview] Đã cập nhật tài khoản mô phỏng: hoaihkht1994@gmail.com | Pro | 450 Credits.');
+        addLog('[Preview] Dữ liệu demo, không đọc tài khoản thật.');
       }, 1000);
     }
   };
+
+  const pickImages = async (job?: StudioTask, slot: 'start' | 'end' | 'reference' = 'reference') => {
+    const api = (window as any).electronAPI;
+    if (job && ['Đang chạy', 'Đang gửi'].includes(job.State)) { addLog('Không đổi ảnh của job đang chạy.'); return true; }
+    if (!api?.selectImages) return false;
+    try {
+      const files = await api.selectImages(slot === 'reference');
+      if (!files.length) return true;
+      setImagePreviews(prev => ({ ...prev, ...Object.fromEntries(files.filter((file: any) => file.preview).map((file: any) => [file.path, file.preview])) }));
+      if (!job) setReferences(files.map((file: any) => file.path));
+      else {
+        const patch = slot === 'start' ? { Id: job.Id, StartImage: files[0].path } : slot === 'end'
+          ? { Id: job.Id, EndImage: files[0].path } : { Id: job.Id, References: files.map((file: any) => file.path) };
+        await api.updateJob(patch);
+        setQueue(prev => prev.map(item => item.Id === job.Id ? { ...item, ...patch } : item));
+      }
+      return true;
+    } catch (error: any) { addLog('[Ảnh] ' + error.message); return true; }
+  };
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.imagePreview) return;
+    const paths = [...new Set(queue.flatMap(job => [job.StartImage, job.EndImage, ...(job.References || [])]).filter(Boolean))] as string[];
+    for (const path of paths) if (!imagePreviews[path]) api.imagePreview(path).then((preview: string) => {
+      if (preview) setImagePreviews(prev => ({ ...prev, [path]: preview }));
+    }).catch(() => {});
+  }, [queue]);
 
   const stats = {
     running: queue.filter(q => q.State === 'Đang chạy' || q.State === 'Đang gửi').length,
@@ -385,6 +432,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#131924] text-slate-100 font-sans select-none overflow-hidden">
+      {!(window as any).electronAPI && <div className="bg-amber-900/60 text-amber-200 px-4 py-2 text-xs">Bản xem thử giao diện: tài khoản, tiến độ và kết quả mô phỏng không phải kết quả Flow thật. Chạy bản Electron để dùng Chrome/CDP.</div>}
       {/* Header Bar */}
       <header className="h-14 bg-[#1C2534] border-b border-[#2B374B] flex items-center justify-between px-4 shrink-0 z-20">
         <div className="flex items-center gap-3">
@@ -395,7 +443,7 @@ export default function App() {
             <h1 className="text-sm font-bold tracking-wide text-white flex items-center gap-2">
               FlowDesk Studio <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono">Electron CDP</span>
             </h1>
-            <p className="text-[11px] text-slate-400">Điều khiển trực tiếp Google Flow qua CDP WebSocket • 100% cơ chế gốc</p>
+            <p className="text-[11px] text-slate-400">Điều khiển Chrome qua CDP • Trạng thái từ Flow và tệp tải thực tế</p>
           </div>
         </div>
 
@@ -493,7 +541,7 @@ export default function App() {
               <div className="flex bg-[#131924] p-1 rounded-lg border border-[#2B374B]">
                 <button
                   onClick={() => {
-                    setActiveKind('video');
+                    setActiveKind('video'); setPromptsText(draftInputs.current.video); setReferences([]);
                     setModel('Veo 3.1 Fast');
                     setMode('Văn bản / Khung hình → Video');
                   }}
@@ -505,7 +553,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    setActiveKind('image');
+                    setActiveKind('image'); setPromptsText(draftInputs.current.image); setReferences([]);
                     setModel('Nano Banana 2.1');
                     setMode('Văn bản / Ảnh tham chiếu → Ảnh');
                   }}
@@ -526,7 +574,10 @@ export default function App() {
                     onChange={e => setModel(e.target.value)}
                     className="w-full bg-[#131924] border border-[#2B374B] rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
                   >
-                    {activeKind === 'video' ? (
+                    {catalogs[activeKind]?.length ? <>
+                      {!catalogs[activeKind].some(item => item.name === model) && <option value={model}>{model} (chưa khớp danh mục)</option>}
+                      {catalogs[activeKind].map(item => <option key={item.name} value={item.name} disabled={item.disabled}>{item.name}</option>)}
+                    </> : activeKind === 'video' ? (
                       <>
                         <option value="Veo 3.1 Fast">Veo 3.1 Fast</option>
                         <option value="Veo 3.1 Lite">Veo 3.1 Lite</option>
@@ -543,6 +594,18 @@ export default function App() {
                   </select>
                 </div>
 
+                <button type="button" className="text-xs text-cyan-300" disabled={running} onClick={async () => {
+                  const api = (window as any).electronAPI;
+                  if (!api?.syncModels) { addLog('[Preview] Cần chạy Electron để đọc danh mục model thật.'); return; }
+                  try {
+                    const result = await api.syncModels(selectedAccountId, activeKind);
+                    setCatalogs(prev => ({ ...prev, [activeKind]: result.models }));
+                    const key = (value: string) => value.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+                    const match = result.models.find((item: any) => !item.disabled && key(item.name) === key(model));
+                    if (match) setModel(match.name);
+                    addLog('Đã đọc danh mục model thực tế từ Flow.');
+                  } catch (error: any) { addLog(error.message); }
+                }}>↻ Đồng bộ model từ Flow</button>
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Tỷ lệ khung hình</label>
                   <select
@@ -632,7 +695,8 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
+                      if (await pickImages(undefined, 'reference')) return;
                       const input = document.createElement('input');
                       input.type = 'file';
                       input.multiple = true;
@@ -666,6 +730,8 @@ export default function App() {
                 </div>
               </div>
 
+              {activeKind === 'video' && <select value={mode} onChange={e => setMode(e.target.value)} className="bg-[#131924] border border-[#2B374B] rounded p-2 text-xs"><option>Văn bản / Khung hình → Video</option><option>Thành phần → Video</option></select>}
+              <label className="text-xs text-slate-400 flex items-center gap-2"><input type="checkbox" checked={samePrompt} onChange={e => setSamePrompt(e.target.checked)} /> Dùng một prompt cho tất cả ảnh</label>
               {/* Prompt Textarea */}
               <div className="flex-1 flex flex-col min-h-[120px]">
                 <div className="flex items-center justify-between mb-1">
@@ -681,7 +747,7 @@ export default function App() {
                 </div>
                 <textarea
                   value={promptsText}
-                  onChange={e => setPromptsText(e.target.value)}
+                  onChange={e => { draftInputs.current[activeKind] = e.target.value; setPromptsText(e.target.value); }}
                   placeholder="Gõ prompt tại đây, mỗi prompt tự động tạo 1 hàng job trong bảng bên phải..."
                   className="w-full flex-1 bg-[#131924] border border-[#2B374B] rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 resize-none font-sans"
                 />
@@ -773,7 +839,8 @@ export default function App() {
                               {activeKind === 'video' ? (
                                 <>
                                   <div
-                                    onClick={() => {
+                                    onClick={async () => {
+                      if (await pickImages(q, 'start')) return;
                                       const input = document.createElement('input');
                                       input.type = 'file';
                                       input.accept = 'image/*';
@@ -788,10 +855,11 @@ export default function App() {
                                     className="w-10 h-10 rounded border border-[#3A4A63] bg-[#131924] hover:border-cyan-400 cursor-pointer flex flex-col items-center justify-center text-[9px] text-slate-400 hover:text-cyan-300"
                                     title="Ảnh đầu (Start Frame)"
                                   >
-                                    {q.StartImage ? 'Đầu' : '+ Đầu'}
+                                    {q.StartImage && imagePreviews[q.StartImage] ? <img src={imagePreviews[q.StartImage]} alt="Ảnh đầu" className="w-full h-full object-cover rounded" /> : q.StartImage ? 'Đầu' : '+ Đầu'}
                                   </div>
                                   <div
-                                    onClick={() => {
+                                    onClick={async () => {
+                      if (await pickImages(q, 'end')) return;
                                       const input = document.createElement('input');
                                       input.type = 'file';
                                       input.accept = 'image/*';
@@ -806,12 +874,13 @@ export default function App() {
                                     className="w-10 h-10 rounded border border-[#3A4A63] bg-[#131924] hover:border-cyan-400 cursor-pointer flex flex-col items-center justify-center text-[9px] text-slate-400 hover:text-cyan-300"
                                     title="Ảnh cuối (End Frame)"
                                   >
-                                    {q.EndImage ? 'Cuối' : '+ Cuối'}
+                                    {q.EndImage && imagePreviews[q.EndImage] ? <img src={imagePreviews[q.EndImage]} alt="Ảnh cuối" className="w-full h-full object-cover rounded" /> : q.EndImage ? 'Cuối' : '+ Cuối'}
                                   </div>
                                 </>
                               ) : (
                                 <div
-                                  onClick={() => {
+                                  onClick={async () => {
+                      if (await pickImages(q, 'reference')) return;
                                     const input = document.createElement('input');
                                     input.type = 'file';
                                     input.multiple = true;
@@ -841,7 +910,16 @@ export default function App() {
                                 setQueue(prev => prev.map(item => item.Id === q.Id ? { ...item, Prompt: val } : item));
                                 const api = (window as any).electronAPI;
                                 if (api && api.updateJob) {
-                                  api.updateJob({ ...q, Prompt: val });
+                                  api.updateJob({ Id: q.Id, Prompt: val }).catch((error: any) => addLog(error.message));
+                                  if (q.AutoDraft && !q.Submitted && q.State === 'Hàng đợi') {
+                                    const drafts = queue.filter(job => job.Kind === activeKind && job.AutoDraft && !job.Submitted && job.State === 'Hàng đợi');
+                                    const index = drafts.findIndex(job => job.Id === q.Id);
+                                    const values = splitMode === 'Đoạn trống / 1 prompt' ? promptsText.split(/\n\s*\n/) : promptsText.split('\n');
+                                    if (index >= 0 && index < values.length) {
+                                      values[index] = val; const text = values.join(splitMode === 'Đoạn trống / 1 prompt' ? '\n\n' : '\n');
+                                      draftInputs.current[activeKind] = text; setPromptsText(text);
+                                    }
+                                  }
                                 }
                               }}
                               className="w-full bg-[#131924] border border-[#2B374B] rounded p-1.5 text-xs text-slate-200 resize-none h-14 focus:outline-none focus:border-cyan-500 font-sans"
@@ -1280,3 +1358,4 @@ export default function App() {
     </div>
   );
 }
+
