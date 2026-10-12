@@ -149,7 +149,7 @@
     if(request.action==='finishUpload'){
       const initial=request.initialCount;
       const finishNames=['Cắt và lưu','Crop and save','Lưu ảnh','Save image','Thêm vào câu lệnh','Add to prompt'];
-      for(let i=0;i<60;i++){
+      for(let i=0;i<360;i++){
         if(attachmentCount(request.slot)>initial)return {ok:true,data:{attached:true}};
         const candidates=list('button').filter(e=>finishNames.includes(label(e))&&!disabled(e));
         if(candidates.length===1){tap(candidates[0]);await sleep(700);}else await sleep(250);
@@ -219,3 +219,4 @@
     throw Error('Thao tác không được hỗ trợ.');
   } catch(error) {return {ok:false,error:error.message};}
 })(__FLOWDESK_REQUEST__)
+

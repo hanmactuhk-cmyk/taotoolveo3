@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dữ liệu Store & Thư mục
   getStore: () => ipcRenderer.invoke('store:get'),
   selectFolder: () => ipcRenderer.invoke('store:select-folder'),
+  selectImages: (multiple = false) => ipcRenderer.invoke('images:select', { multiple }),
+  imagePreview: (filePath) => ipcRenderer.invoke('images:preview', filePath),
+  syncModels: (accountId, kind) => ipcRenderer.invoke('flow:catalog', { accountId, kind }),
   openFolder: (folderPath) => ipcRenderer.invoke('store:open-folder', folderPath),
 
   // Quản lý Hàng đợi & Jobs
@@ -52,3 +55,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {};
   }
 });
+

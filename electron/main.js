@@ -1,6 +1,11 @@
 const { app, BrowserWindow, session, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const { checkAccount } = require('./account-service');
+const { syncDrafts } = require('./drafts');
+const { activeStates } = require('./job-utils');
+const selectedImages = new Set();
 
 const Store = require('./store');
 const BrowserManager = require('./browser-manager');
@@ -13,6 +18,10 @@ let browserManager;
 let jobRunner;
 
 function sendToRenderer(channel, data) {
+  if (channel === 'log' && store) {
+    try { fs.appendFileSync(path.join(store.root, 'studio.log'), new Date().toISOString() + ' ' + data + '\n'); }
+    catch (error) { console.error('Không lưu được log:', error.message); }
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, data);
   }
@@ -33,8 +42,8 @@ function createWindow() {
       preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,               // Khắc phục lỗi nạp file:// module CORS gây màn hình đen
-      allowRunningInsecureContent: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
       session: ses
     }
   });
@@ -92,7 +101,41 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
 }
 
+function requireSelectedImage(value) {
+  if (!path.isAbsolute(value || '') || !/\.(png|jpe?g|webp)$/i.test(value)) throw new Error('Chọn ảnh bằng hộp thoại của Electron.');
+  const remembered = selectedImages.has(value) || store.data.Queue.some(job =>
+    [job.StartImage, job.EndImage, ...(job.References || [])].includes(value));
+  if (!remembered || !fs.existsSync(value)) throw new Error('Ảnh không còn tồn tại hoặc chưa được chọn.');
+}
+
+function imagePreview(value) {
+  requireSelectedImage(value);
+  if (fs.statSync(value).size > 20 * 1024 * 1024) return null;
+  const ext = path.extname(value).toLowerCase();
+  const type = ext === '.jpg' || ext === '.jpeg' ? 'jpeg' : ext.slice(1);
+  return 'data:image/' + type + ';base64,' + fs.readFileSync(value).toString('base64');
+}
+
 function registerIpc() {
+  ipcMain.handle('images:select', async (event, { multiple = false } = {}) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Chọn ảnh cho job', properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+      filters: [{ name: 'Ảnh', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+    });
+    if (result.canceled) return [];
+    result.filePaths.forEach(value => selectedImages.add(value));
+    return result.filePaths.map(value => ({ path: value, name: path.basename(value), preview: imagePreview(value) }));
+  });
+  ipcMain.handle('images:preview', async (event, value) => imagePreview(value));
+  ipcMain.handle('flow:catalog', async (event, { accountId, kind }) => {
+    if (!['image', 'video'].includes(kind)) throw new Error('Chế độ không hợp lệ.');
+    const account = store.data.Accounts.find(item => item.Id === accountId) || store.data.Accounts.find(item => item.Enabled && item.LoginStarted);
+    if (!account) throw new Error('Thêm và đăng nhập tài khoản trước khi đồng bộ model.');
+    if (jobRunner.accountBusy(account.Id)) throw new Error('Đợi job của hồ sơ kết thúc trước khi đồng bộ model.');
+    const client = await browserManager.connectFlowTab(account);
+    try { return await client.bridge({ action: 'catalog', kind }); }
+    finally { client.dispose(); }
+  });
   // Store
   ipcMain.handle('store:get', async () => {
     return store.data;
@@ -123,9 +166,10 @@ function registerIpc() {
 
   // Accounts
   ipcMain.handle('account:create', async () => {
-    const nextNum = store.data.Accounts.length + 1;
+    const nextNum = Math.max(0, ...store.data.Accounts.map(a => Number((a.Name || '').match(/\d+$/)?.[0]) || 0)) + 1;
+    if (store.data.Accounts.length >= 30) throw new Error('Đã có 30 hồ sơ.');
     const newAcc = {
-      Id: `acc_${nextNum.toString().padStart(2, '0')}`,
+      Id: 'acc_' + crypto.randomUUID(),
       Name: `Tài khoản ${nextNum.toString().padStart(2, '0')}`,
       Email: '',
       Plan: 'Unknown',
@@ -149,6 +193,7 @@ function registerIpc() {
   ipcMain.handle('account:open-login', async (event, accountId) => {
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (!acc) throw new Error('Không tìm thấy tài khoản.');
+    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job đang chạy trước khi mở lại hồ sơ.');
     return await browserManager.openLogin(acc);
   });
 
@@ -156,42 +201,20 @@ function registerIpc() {
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (!acc) throw new Error('Không tìm thấy tài khoản.');
 
-    sendToRenderer('log', `[Account] Bắt đầu kết nối CDP kiểm tra tài khoản ${acc.Name}...`);
-    await browserManager.enableControl(acc);
-
-    const cdp = new CdpClient();
-    try {
-      await cdp.connect(acc.BrowserId);
-      await cdp.enableDiagnostics();
-
-      const data = await cdp.bridge({ action: 'account' });
-      if (!data || !data.email) throw new Error('Flow chưa trả email.');
-
-      acc.Email = data.email;
-      acc.Plan = data.plan;
-      acc.Credits = data.credits;
-      acc.Evidence = data.evidence || '';
-      acc.CheckedUtc = new Date().toISOString();
-      acc.Status = acc.Plan === 'Unknown' || acc.Credits === null ?
-        'Đã đọc email; gói/credit chưa rõ' :
-        'Hoạt động — đã xác minh từ Flow';
-
-      store.save();
-      sendToRenderer('account-updated', acc);
-      sendToRenderer('log', `[Account] Đã xác minh: ${acc.Email} | Gói: ${acc.Plan} | Credits: ${acc.Credits}`);
-      return { success: true, account: acc };
-    } finally {
-      cdp.dispose();
-    }
+    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ này kết thúc trước khi kiểm tra.');
+    return checkAccount(browserManager, store, acc, message => sendToRenderer('log', message),
+      account => sendToRenderer('account-updated', account));
   });
 
   ipcMain.handle('account:close', async (event, accountId) => {
+    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ kết thúc trước khi đóng Chrome.');
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (acc) await browserManager.close(acc);
     return { success: true };
   });
 
   ipcMain.handle('account:delete', async (event, accountId) => {
+    if (jobRunner.accountBusy(accountId)) throw new Error('Không xóa tài khoản đang chạy job.');
     store.data.Accounts = store.data.Accounts.filter(a => a.Id !== accountId);
     store.save();
     return { success: true };
@@ -209,77 +232,43 @@ function registerIpc() {
   });
 
   // Queue & Jobs
-  ipcMain.handle('queue:sync-prompts', async (event, { kind, prompts, model, ratio, count, mode, references, accountId }) => {
-    const drafts = store.data.Queue.filter(q => q.Kind === kind && q.AutoDraft && !q.Submitted && q.State === 'Hàng đợi');
-
-    for (let i = 0; i < prompts.length; i++) {
-      const text = prompts[i];
-      if (i < drafts.length) {
-        drafts[i].Prompt = text;
-        drafts[i].Model = model;
-        drafts[i].Ratio = ratio;
-        drafts[i].Count = count;
-        drafts[i].Mode = mode;
-        drafts[i].References = references || [];
-        if (accountId && accountId !== 'auto') drafts[i].AccountId = accountId;
-      } else {
-        const newJob = {
-          Id: 'job_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
-          Kind: kind,
-          Mode: mode,
-          Model: model,
-          Ratio: ratio,
-          Count: count,
-          Prompt: text,
-          References: references || [],
-          StartImage: null,
-          EndImage: null,
-          State: 'Hàng đợi',
-          Note: 'Bản nháp tự động',
-          AccountId: accountId === 'auto' ? '' : (accountId || ''),
-          Folder: '',
-          Progress: null,
-          Results: [],
-          Submitted: false,
-          AutoDraft: true,
-          Attempts: []
-        };
-        store.data.Queue.push(newJob);
-      }
-    }
-
-    // Xóa các hàng thừa nếu người dùng xóa bớt prompt
-    for (let i = prompts.length; i < drafts.length; i++) {
-      const idx = store.data.Queue.indexOf(drafts[i]);
-      if (idx !== -1) store.data.Queue.splice(idx, 1);
-    }
-
-    store.save();
-    return store.data.Queue;
+  ipcMain.handle('queue:sync-prompts', async (event, payload) => {
+    for (const image of payload.references || []) requireSelectedImage(image);
+    return syncDrafts(store, payload);
   });
 
-  ipcMain.handle('queue:update-job', async (event, updatedJob) => {
-    const job = store.data.Queue.find(q => q.Id === updatedJob.Id);
-    if (job) {
-      if (job.State === 'Đang chạy') {
-        // Nếu đang chạy, prompt sửa sẽ chỉ áp dụng cho lần chạy tiếp theo
-        job.Prompt = updatedJob.Prompt;
-      } else {
-        Object.assign(job, updatedJob);
-      }
-      store.save();
+  ipcMain.handle('queue:update-job', async (event, patch) => {
+    const job = store.data.Queue.find(item => item.Id === patch.Id);
+    if (!job) throw new Error('Không tìm thấy job.');
+    const keys = activeStates.has(job.State) ? ['Prompt'] :
+      ['Prompt', 'Model', 'Ratio', 'Count', 'Mode', 'StartImage', 'EndImage', 'References', 'AccountId'];
+    if (activeStates.has(job.State) && ['StartImage', 'EndImage', 'References'].some(key => Object.prototype.hasOwnProperty.call(patch, key))) {
+      throw new Error('Không đổi ảnh của job đang chạy; chờ lần hiện tại kết thúc.');
     }
-    return { success: true };
+    for (const key of keys) if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      if ((key === 'StartImage' || key === 'EndImage') && patch[key]) requireSelectedImage(patch[key]);
+      if (key === 'References') {
+        if (!Array.isArray(patch[key])) throw new Error('Danh sách ảnh không hợp lệ.');
+        patch[key].forEach(requireSelectedImage); job.UseGlobalReferences = false;
+      }
+      job[key] = patch[key];
+    }
+    if (job.Kind === 'video' && (job.StartImage || job.EndImage)) job.Mode = 'Văn bản / Khung hình → Video';
+    store.save(); sendToRenderer('queue-updated', store.data.Queue);
+    return { success: true, job };
   });
 
   ipcMain.handle('queue:delete-job', async (event, jobId) => {
+    const job = store.data.Queue.find(q => q.Id === jobId);
+    if (job && activeStates.has(job.State)) throw new Error('Không xóa job đang chạy.');
     store.data.Queue = store.data.Queue.filter(q => q.Id !== jobId);
     store.save();
     return { success: true };
   });
 
   ipcMain.handle('queue:retry-job', async (event, jobId) => {
-    jobRunner.retryJob(jobId);
+    const job = jobRunner.retryJob(jobId);
+    if (!jobRunner.running) jobRunner.runQueue({ ...jobRunner.lastOptions, kind: job.Kind, only: [job.Id] }).catch(error => sendToRenderer('log', error.message));
     return { success: true };
   });
 
@@ -291,7 +280,9 @@ function registerIpc() {
 
   // Runner controls
   ipcMain.handle('runner:start', async (event, options) => {
-    jobRunner.runQueue(options);
+    for (const job of store.data.Queue) if ((!options.kind || job.Kind === options.kind) && job.AutoDraft) job.AutoDraft = false;
+    store.save();
+    jobRunner.runQueue(options).catch(error => sendToRenderer('log', '[Runner] ' + error.message));
     return { success: true };
   });
 
@@ -324,3 +315,4 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
