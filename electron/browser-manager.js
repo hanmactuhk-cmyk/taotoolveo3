@@ -67,6 +67,10 @@ class BrowserManager {
     ];
   }
 
+  async openRegular(account) {
+    return require('./regular-profile').openRegularProfile(this, this.store, account);
+  }
+
   async openLogin(account) {
     if (await this.isOpen(account)) await this.close(account);
     const profile = this.store.profileDir(account);

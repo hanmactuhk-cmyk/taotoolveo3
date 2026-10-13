@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
 
   // Quản lý tài khoản
+  openRegularProfile: (accountId) => ipcRenderer.invoke('account:open-regular', accountId),
   openChromeLogin: (accountId) => ipcRenderer.invoke('account:open-login', accountId),
   checkAccount: (accountId) => ipcRenderer.invoke('account:check', accountId),
   clearCaptchaSession: (accountId) => ipcRenderer.invoke('account:clear-captcha', accountId),

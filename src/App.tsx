@@ -340,6 +340,19 @@ export default function App() {
     addLog(`[Job] Đã xóa tác vụ ${jobId.slice(0, 8)}.`);
   };
 
+  const handleOpenRegularProfile = async (accId: string) => {
+    setSelectedAccId(accId);
+    const api = (window as any).electronAPI;
+    if (!api?.openRegularProfile) {
+      addLog('Mở hồ sơ riêng cần chạy bản Electron mới; bản xem trước không hỗ trợ.');
+      return;
+    }
+    try {
+      await api.openRegularProfile(accId);
+      addLog('Đã mở Cốc Cốc thường. Mỗi tài khoản giữ phiên riêng; bạn đăng nhập và tạo trực tiếp trong cửa sổ này.');
+    } catch (error: any) { addLog('[Hồ sơ thường] ' + error.message); }
+  };
+
   const handleOpenChromeLogin = async (accId: string) => {
     setSelectedAccId(accId);
     const target = accounts.find(a => a.Id === accId);
@@ -1065,6 +1078,21 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="px-5 py-3 flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      const acc = accounts.find(a => a.Id === selectedAccId) || accounts[0];
+                      if (!acc) return alert('Thêm tài khoản trước khi mở hồ sơ.');
+                      handleOpenRegularProfile(acc.Id);
+                    }}
+                    className="px-3.5 py-2 bg-[#242E40] hover:bg-[#2D3B52] text-xs font-semibold text-cyan-300 rounded-lg"
+                  >
+                    Mở hồ sơ thường
+                  </button>
+
+                <span className="text-xs text-slate-400">Mỗi tài khoản dùng một hồ sơ riêng. Đăng nhập và tạo trực tiếp trong Cốc Cốc; cookie được giữ cho lần sau.</span>
+              </div>
+
               {/* Accounts Table */}
               <div className="overflow-x-auto">
                 {accounts.length === 0 ? (
@@ -1155,11 +1183,11 @@ export default function App() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleOpenChromeLogin(acc.Id);
+                                  handleOpenRegularProfile(acc.Id);
                                 }}
                                 className="px-2.5 py-1 bg-[#242E40] hover:bg-[#2D3B52] text-cyan-300 rounded transition-colors text-[11px]"
                               >
-                                Mở Cốc Cốc
+                                Mở hồ sơ thường
                               </button>
                               <button
                                 onClick={(e) => {

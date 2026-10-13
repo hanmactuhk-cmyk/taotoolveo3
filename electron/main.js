@@ -190,6 +190,15 @@ function registerIpc() {
     return newAcc;
   });
 
+  ipcMain.handle('account:open-regular', async (event, accountId) => {
+    const acc = store.data.Accounts.find(a => a.Id === accountId);
+    if (!acc) throw new Error('Không tìm thấy tài khoản.');
+    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ này kết thúc trước khi mở.');
+    const result = await browserManager.openRegular(acc);
+    sendToRenderer('account-updated', acc);
+    return result;
+  });
+
   ipcMain.handle('account:open-login', async (event, accountId) => {
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (!acc) throw new Error('Không tìm thấy tài khoản.');
