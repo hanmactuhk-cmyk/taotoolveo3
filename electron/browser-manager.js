@@ -17,9 +17,9 @@ class BrowserManager {
     const localAppData = env['LOCALAPPDATA'] || (env['USERPROFILE'] ? path.join(env['USERPROFILE'], 'AppData\\Local') : 'C:\\Users\\AppData\\Local');
 
     const paths = [
-      path.join(programFiles, 'CocCoc\\Browser\\Application\\browser.exe'),
-      path.join(programFilesX86, 'CocCoc\\Browser\\Application\\browser.exe'),
-      path.join(localAppData, 'CocCoc\\Browser\\Application\\browser.exe')
+      path.join(programFiles, 'Google\\Chrome\\Application\\chrome.exe'),
+      path.join(programFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
+      path.join(localAppData, 'Google\\Chrome\\Application\\chrome.exe')
     ];
 
     for (const p of paths) {
@@ -79,7 +79,7 @@ class BrowserManager {
     account.LoginMode = true;
     account.Port = 0;
     account.BrowserId = '';
-    account.Status = 'Đăng nhập xong: đóng Cốc Cốc hồ sơ để kết nối';
+    account.Status = 'Đăng nhập xong: đóng Chrome hồ sơ để kết nối';
     this.store.save();
 
     const args = BrowserManager.loginArguments(profile);
@@ -94,7 +94,7 @@ class BrowserManager {
       }
     }
 
-    throw new Error('Không tìm thấy Cốc Cốc. Hãy cài Cốc Cốc trước khi mở hồ sơ.');
+    throw new Error('Không tìm thấy Chrome. Hãy cài Chrome trước khi mở hồ sơ.');
   }
 
   async enableControl(account) {
@@ -109,7 +109,7 @@ class BrowserManager {
     if (await this.isOpen(account)) return;
     const profile = this.store.profileDir(account);
     if (BrowserManager.profileInUse(profile)) {
-      throw new Error('Đóng cửa sổ Cốc Cốc của hồ sơ đã đăng nhập, rồi bấm Kết nối và đọc tài khoản.');
+      throw new Error('Đóng cửa sổ Chrome của hồ sơ đã đăng nhập, rồi bấm Kết nối và đọc tài khoản.');
     }
     account.LoginMode = false;
     this.store.save();
@@ -174,7 +174,7 @@ class BrowserManager {
     }
 
     const exe = BrowserManager.findBrowser();
-    if (!exe) throw new Error('Cần Cốc Cốc, Cốc Cốc được cài trên máy.');
+    if (!exe) throw new Error('Cần Chrome được cài trên máy.');
 
     const port = 0; // Tự động cấp phát cổng động
     const args = [
@@ -231,7 +231,7 @@ class BrowserManager {
       }
       await new Promise(r => setTimeout(r, 400));
     }
-    throw new Error('Không kết nối được hồ sơ Cốc Cốc sau 20s. ' + lastFailure);
+    throw new Error('Không kết nối được hồ sơ Chrome sau 20s. ' + lastFailure);
   }
 
   async close(account) {

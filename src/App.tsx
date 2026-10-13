@@ -113,7 +113,7 @@ export default function App() {
   const [paused, setPaused] = useState<boolean>(false);
   const [logs, setLogs] = useState<string[]>([
     '12:00:00 [System] Khởi động FlowDesk Studio • Electron Edition',
-    '12:00:02 [BrowserManager] Kiểm tra hồ sơ Cốc Cốc tại Data/Profiles/ (Lưu cookie độc lập).',
+    '12:00:02 [BrowserManager] Kiểm tra hồ sơ Chrome tại Data/Profiles/ (Lưu cookie độc lập).',
     '12:00:05 [CDP] Cổng gỡ lỗi cục bộ 127.0.0.1 kết nối theo cơ chế DevToolsActivePort.',
     '12:00:10 [Security] Stealth Mode sẵn sàng: navigator.webdriver = undefined.'
   ]);
@@ -349,14 +349,14 @@ export default function App() {
     }
     try {
       await api.openRegularProfile(accId);
-      addLog('Đã mở Cốc Cốc thường. Mỗi tài khoản giữ phiên riêng; bạn đăng nhập và tạo trực tiếp trong cửa sổ này.');
+      addLog('Đã mở Chrome thường. Mỗi tài khoản giữ phiên riêng; bạn đăng nhập và tạo trực tiếp trong cửa sổ này.');
     } catch (error: any) { addLog('[Hồ sơ thường] ' + error.message); }
   };
 
   const handleOpenChromeLogin = async (accId: string) => {
     setSelectedAccId(accId);
     const target = accounts.find(a => a.Id === accId);
-    addLog(`[Cốc Cốc] Khởi chạy Cốc Cốc cho hồ sơ ${target?.Name || accId}...`);
+    addLog(`[Chrome] Khởi chạy Chrome cho hồ sơ ${target?.Name || accId}...`);
     addLog(`[Cơ chế gốc] chrome.exe --user-data-dir="Data/Profiles/${accId}" --disable-blink-features=AutomationControlled --exclude-switches=enable-automation --disable-infobars --new-window https://labs.google/fx/tools/flow`);
 
     const api = (window as any).electronAPI;
@@ -364,11 +364,11 @@ export default function App() {
       try {
         const res = await api.openChromeLogin(accId);
         if (res.success) {
-          addLog(`[Cốc Cốc] Đã mở thành công cửa sổ Cốc Cốc! Hãy đăng nhập Google rồi đóng cửa sổ để kết nối.`);
-          setAccounts(prev => prev.map(a => a.Id === accId ? { ...a, Status: 'Đăng nhập xong: đóng Cốc Cốc để kết nối' } : a));
+          addLog(`[Chrome] Đã mở thành công cửa sổ Chrome! Hãy đăng nhập Google rồi đóng cửa sổ để kết nối.`);
+          setAccounts(prev => prev.map(a => a.Id === accId ? { ...a, Status: 'Đăng nhập xong: đóng Chrome để kết nối' } : a));
         }
       } catch (err: any) {
-        addLog(`[Lỗi mở Cốc Cốc] ${err.message}`);
+        addLog(`[Lỗi mở Chrome] ${err.message}`);
       }
     } else {
       window.open('https://labs.google/fx/tools/flow', '_blank');
@@ -461,7 +461,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#131924] text-slate-100 font-sans select-none overflow-hidden">
-      {!(window as any).electronAPI && <div className="bg-amber-900/60 text-amber-200 px-4 py-2 text-xs">Bản xem thử giao diện: tài khoản, tiến độ và kết quả mô phỏng không phải kết quả Flow thật. Chạy bản Electron để dùng Cốc Cốc/CDP.</div>}
+      {!(window as any).electronAPI && <div className="bg-amber-900/60 text-amber-200 px-4 py-2 text-xs">Bản xem thử giao diện: tài khoản, tiến độ và kết quả mô phỏng không phải kết quả Flow thật. Chạy bản Electron để dùng Chrome/CDP.</div>}
       {/* Header Bar */}
       <header className="h-14 bg-[#1C2534] border-b border-[#2B374B] flex items-center justify-between px-4 shrink-0 z-20">
         <div className="flex items-center gap-3">
@@ -472,7 +472,7 @@ export default function App() {
             <h1 className="text-sm font-bold tracking-wide text-white flex items-center gap-2">
               FlowDesk Studio <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono">Electron CDP</span>
             </h1>
-            <p className="text-[11px] text-slate-400">Điều khiển Cốc Cốc qua CDP • Trạng thái từ Flow và tệp tải thực tế</p>
+            <p className="text-[11px] text-slate-400">Điều khiển Chrome qua CDP • Trạng thái từ Flow và tệp tải thực tế</p>
           </div>
         </div>
 
@@ -530,7 +530,7 @@ export default function App() {
             }}
             className="px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-all shadow flex items-center gap-1.5"
           >
-            <ExternalLink className="w-3.5 h-3.5" /> + Mở Cốc Cốc Đăng nhập
+            <ExternalLink className="w-3.5 h-3.5" /> + Mở Chrome Đăng nhập
           </button>
         </div>
       </header>
@@ -1027,10 +1027,10 @@ export default function App() {
                     <Users className="w-5 h-5 text-cyan-400" /> CÀI ĐẶT HỆ THỐNG • TÀI KHOẢN FLOW ({accounts.length}/30)
                   </h2>
                   <p className="text-xs text-emerald-400 mt-1">
-                    Mỗi tài khoản lưu giữ phiên riêng tại <code>Data/Profiles/&lt;id&gt;</code>. Người dùng tự đăng nhập Google trong Cốc Cốc thường; tool không giữ mật khẩu.
+                    Mỗi tài khoản lưu giữ phiên riêng tại <code>Data/Profiles/&lt;id&gt;</code>. Người dùng tự đăng nhập Google trong Chrome thường; tool không giữ mật khẩu.
                   </p>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Đăng nhập xong: đóng Cốc Cốc hồ sơ → Bấm "Kết nối và đọc tài khoản" để đọc trực tiếp email, gói và credits từ Flow.
+                    Đăng nhập xong: đóng Chrome hồ sơ → Bấm "Kết nối và đọc tài khoản" để đọc trực tiếp email, gói và credits từ Flow.
                   </p>
                 </div>
 
@@ -1062,7 +1062,7 @@ export default function App() {
                     }}
                     className="px-3.5 py-2 bg-[#242E40] hover:bg-[#2D3B52] text-xs font-semibold text-cyan-300 rounded-lg transition-colors flex items-center gap-1.5 border border-[#3A4A63]"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" /> Đăng nhập Cốc Cốc thường
+                    <ExternalLink className="w-3.5 h-3.5" /> Đăng nhập Chrome thường
                   </button>
 
                   <button
@@ -1090,7 +1090,7 @@ export default function App() {
                     Mở hồ sơ thường
                   </button>
 
-                <span className="text-xs text-slate-400">Mỗi tài khoản dùng một hồ sơ riêng. Đăng nhập và tạo trực tiếp trong Cốc Cốc; cookie được giữ cho lần sau.</span>
+                <span className="text-xs text-slate-400">Mỗi tài khoản dùng một hồ sơ riêng. Đăng nhập và tạo trực tiếp trong Chrome; cookie được giữ cho lần sau.</span>
               </div>
 
               {/* Accounts Table */}
@@ -1099,7 +1099,7 @@ export default function App() {
                   <div className="p-12 text-center border border-dashed border-[#2B374B] rounded-xl bg-[#131924]">
                     <Users className="w-10 h-10 text-slate-500 mx-auto mb-2" />
                     <h3 className="text-sm font-semibold text-slate-200">Chưa có hồ sơ tài khoản nào</h3>
-                    <p className="text-xs text-slate-400 mt-1">Bấm nút "+ Thêm đăng nhập" ở trên để khởi tạo hồ sơ đầu tiên và mở Cốc Cốc.</p>
+                    <p className="text-xs text-slate-400 mt-1">Bấm nút "+ Thêm đăng nhập" ở trên để khởi tạo hồ sơ đầu tiên và mở Chrome.</p>
                   </div>
                 ) : (
                   <table className="w-full text-left border-collapse">
@@ -1244,7 +1244,7 @@ export default function App() {
                   <div className="bg-[#131924] p-3 rounded-lg border border-[#2B374B]">
                     <div className="font-bold text-cyan-400 mb-1">1. Main Process (electron/)</div>
                     <p className="text-slate-400 leading-relaxed">
-                      Quản lý thực thi, hồ sơ Cốc Cốc (<code>Data/Profiles</code>), kết nối CDP WebSocket (<code>cdp-client.js</code>), hàng đợi song song và tệp kết quả.
+                      Quản lý thực thi, hồ sơ Chrome (<code>Data/Profiles</code>), kết nối CDP WebSocket (<code>cdp-client.js</code>), hàng đợi song song và tệp kết quả.
                     </p>
                   </div>
                   <div className="bg-[#131924] p-3 rounded-lg border border-[#2B374B]">
@@ -1287,7 +1287,7 @@ export default function App() {
                       <tr>
                         <td className="py-2.5 px-3 font-mono text-cyan-300">BrowserManager.OpenLogin</td>
                         <td className="py-2.5 px-3 font-mono text-slate-200">electron/browser-manager.js</td>
-                        <td className="py-2.5 px-3 text-slate-400">Khởi chạy Cốc Cốc thật với cờ <code>--disable-blink-features=AutomationControlled</code>.</td>
+                        <td className="py-2.5 px-3 text-slate-400">Khởi chạy Chrome thật với cờ <code>--disable-blink-features=AutomationControlled</code>.</td>
                         <td className="py-2.5 px-3"><span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">Đã chuyển mã & kiểm tra</span></td>
                       </tr>
                       <tr>
@@ -1344,10 +1344,10 @@ export default function App() {
                     <strong>2. Chức năng đã kiểm tra mô phỏng (Simulated):</strong> Kiểm tra cấu hình hàng chờ song song, tự động gõ prompt tách hàng, in-place retry, lưu trữ JSON và đóng gói ứng dụng.
                   </p>
                   <p>
-                    <strong>3. Chức năng cần kiểm chứng trực tiếp trên Flow thật:</strong> Các thao tác bóc tách DOM tài khoản, chặn hộp thoại chọn file của Cốc Cốc và theo dõi thẻ sinh media phụ thuộc vào giao diện web thời gian thực của Google Flow.
+                    <strong>3. Chức năng cần kiểm chứng trực tiếp trên Flow thật:</strong> Các thao tác bóc tách DOM tài khoản, chặn hộp thoại chọn file của Chrome và theo dõi thẻ sinh media phụ thuộc vào giao diện web thời gian thực của Google Flow.
                   </p>
                   <p className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-300">
-                    <strong>Lưu ý quan trọng về lỗi "hoạt động bất thường" (Bot Detection):</strong> Mặc dù công cụ đã tích hợp đầy đủ cờ <code>--disable-blink-features=AutomationControlled</code>, cơ chế đăng nhập thủ công trên Cốc Cốc riêng và ghi đè <code>navigator.webdriver</code> qua preload/CDP, Google Flow liên tục cập nhật các thuật toán nhận diện hành vi (telemetry, click cadence, mouse velocity). Do đó, không thể khẳng định 100% không bao giờ gặp lỗi này nếu chưa chạy thử nghiệm thực tế với tài khoản thật của bạn.
+                    <strong>Lưu ý quan trọng về lỗi "hoạt động bất thường" (Bot Detection):</strong> Mặc dù công cụ đã tích hợp đầy đủ cờ <code>--disable-blink-features=AutomationControlled</code>, cơ chế đăng nhập thủ công trên Chrome riêng và ghi đè <code>navigator.webdriver</code> qua preload/CDP, Google Flow liên tục cập nhật các thuật toán nhận diện hành vi (telemetry, click cadence, mouse velocity). Do đó, không thể khẳng định 100% không bao giờ gặp lỗi này nếu chưa chạy thử nghiệm thực tế với tài khoản thật của bạn.
                   </p>
                 </div>
               </div>

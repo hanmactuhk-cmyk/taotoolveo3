@@ -6,10 +6,10 @@ function regularArguments(profile) {
 
 async function openRegularProfile(browser, store, account, launch = spawn) {
   if (await browser.isOpen(account)) {
-    throw new Error('Đóng phiên điều khiển của hồ sơ này trước khi mở Cốc Cốc thường.');
+    throw new Error('Đóng phiên điều khiển của hồ sơ này trước khi mở Chrome thường.');
   }
   const executable = browser.constructor.findBrowser();
-  if (!executable) throw new Error('Không tìm thấy Cốc Cốc trên máy.');
+  if (!executable) throw new Error('Không tìm thấy Chrome trên máy.');
   const profile = store.profileDir(account);
   await new Promise((resolve, reject) => {
     const child = launch(executable, regularArguments(profile), {
@@ -20,10 +20,10 @@ async function openRegularProfile(browser, store, account, launch = spawn) {
   });
   Object.assign(account, {
     LoginStarted: true, LoginMode: true, Port: 0, BrowserId: '',
-    Status: 'Đã mở Cốc Cốc thường; đăng nhập và tạo trực tiếp trong hồ sơ này'
+    Status: 'Đã mở Chrome thường; đăng nhập và tạo trực tiếp trong hồ sơ này'
   });
   store.save();
-  return { success: true, method: 'regular-coccoc', profile };
+  return { success: true, method: 'regular-chrome', profile };
 }
 
 module.exports = { regularArguments, openRegularProfile };
