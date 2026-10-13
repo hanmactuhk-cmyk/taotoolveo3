@@ -1046,7 +1046,7 @@ export default function App() {
                         const newAcc = await api.createAccount();
                         setAccounts(prev => [...prev, newAcc]);
                         setSelectedAccId(newAcc.Id);
-                        handleOpenChromeLogin(newAcc.Id);
+                        handleOpenRegularProfile(newAcc.Id);
                       }
                     }}
                     className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 shadow"
