@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { spawn, exec } = require('child_process');
+const { spawn } = require('child_process');
 const { isFlowUrl } = require('./job-utils');
 
 class BrowserManager {
@@ -19,13 +19,7 @@ class BrowserManager {
     const paths = [
       path.join(programFiles, 'CocCoc\\Browser\\Application\\browser.exe'),
       path.join(programFilesX86, 'CocCoc\\Browser\\Application\\browser.exe'),
-      path.join(localAppData, 'CocCoc\\Browser\\Application\\browser.exe'),
-      path.join(programFiles, 'Google\\Chrome\\Application\\chrome.exe'),
-      path.join(programFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
-      path.join(localAppData, 'Google\\Chrome\\Application\\chrome.exe'),
-      path.join(programFiles, 'Microsoft\\Edge\\Application\\msedge.exe'),
-      path.join(programFilesX86, 'Microsoft\\Edge\\Application\\msedge.exe'),
-      path.join(localAppData, 'Microsoft\\Edge\\Application\\msedge.exe')
+      path.join(localAppData, 'CocCoc\\Browser\\Application\\browser.exe')
     ];
 
     for (const p of paths) {
@@ -81,7 +75,7 @@ class BrowserManager {
     account.LoginMode = true;
     account.Port = 0;
     account.BrowserId = '';
-    account.Status = 'Đăng nhập xong: đóng Cốc Cốc/Chrome hồ sơ để kết nối';
+    account.Status = 'Đăng nhập xong: đóng Cốc Cốc hồ sơ để kết nối';
     this.store.save();
 
     const args = BrowserManager.loginArguments(profile);
@@ -96,28 +90,7 @@ class BrowserManager {
       }
     }
 
-    // Fallback qua cmd start
-    return new Promise((resolve, reject) => {
-      const coccocCmd = `start "" coccoc ${args.map(a => `"${a}"`).join(' ')}`;
-      const chromeCmd = `start "" chrome ${args.map(a => `"${a}"`).join(' ')}`;
-      const edgeCmd = `start "" msedge ${args.map(a => `"${a}"`).join(' ')}`;
-      exec(coccocCmd, { windowsHide: false }, (err) => {
-        if (err) {
-          exec(chromeCmd, { windowsHide: false }, (chromeErr) => {
-            if (chromeErr) {
-              exec(edgeCmd, { windowsHide: false }, (edgeErr) => {
-                if (edgeErr) reject(new Error('Không tìm thấy Cốc Cốc, Chrome hoặc Edge trên máy.'));
-                else resolve({ success: true, method: 'cmd-edge', profile });
-              });
-            } else {
-              resolve({ success: true, method: 'cmd-chrome', profile });
-            }
-          });
-        } else {
-          resolve({ success: true, method: 'cmd-coccoc', profile });
-        }
-      });
-    });
+    throw new Error('Không tìm thấy Cốc Cốc. Hãy cài Cốc Cốc trước khi mở hồ sơ.');
   }
 
   async enableControl(account) {
@@ -132,7 +105,7 @@ class BrowserManager {
     if (await this.isOpen(account)) return;
     const profile = this.store.profileDir(account);
     if (BrowserManager.profileInUse(profile)) {
-      throw new Error('Đóng cửa sổ Cốc Cốc/Chrome của hồ sơ đã đăng nhập, rồi bấm Kết nối và đọc tài khoản.');
+      throw new Error('Đóng cửa sổ Cốc Cốc của hồ sơ đã đăng nhập, rồi bấm Kết nối và đọc tài khoản.');
     }
     account.LoginMode = false;
     this.store.save();
@@ -197,7 +170,7 @@ class BrowserManager {
     }
 
     const exe = BrowserManager.findBrowser();
-    if (!exe) throw new Error('Cần Cốc Cốc, Chrome hoặc Edge được cài trên máy.');
+    if (!exe) throw new Error('Cần Cốc Cốc, Cốc Cốc được cài trên máy.');
 
     const port = 0; // Tự động cấp phát cổng động
     const args = [
@@ -254,7 +227,7 @@ class BrowserManager {
       }
       await new Promise(r => setTimeout(r, 400));
     }
-    throw new Error('Không kết nối được hồ sơ Cốc Cốc/Chrome sau 20s. ' + lastFailure);
+    throw new Error('Không kết nối được hồ sơ Cốc Cốc sau 20s. ' + lastFailure);
   }
 
   async close(account) {

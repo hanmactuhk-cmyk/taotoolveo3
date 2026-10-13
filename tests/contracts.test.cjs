@@ -20,7 +20,7 @@ test('existing studio/accounts/mapping/log tabs and preview mode are retained', 
   const renderer = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
   for (const tab of ['studio', 'accounts', 'mapping', 'logs']) assert(renderer.includes(`activeTab === '${tab}'`), tab);
   assert(renderer.includes('Bản xem thử giao diện'));
-  assert(renderer.includes('Đăng nhập Chrome thường'));
+  assert(renderer.includes('Đăng nhập Cốc Cốc thường'));
   assert(renderer.includes('Thành phần → Video'));
 });
 
