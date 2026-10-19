@@ -327,29 +327,14 @@ class CdpClient {
   }
 
   async fillPrompt(prompt) {
-    const point = await this.bridge({ action: 'prepareFill' });
-    const x = Number(point.x);
-    const y = Number(point.y);
-
-    await this.humanClick(x, y);
-    await new Promise(r => setTimeout(r, 120 + Math.floor(Math.random() * 150)));
-
-    // Ctrl + A để xóa prompt cũ
-    await this.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
-    await this.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
-    await new Promise(r => setTimeout(r, 60 + Math.floor(Math.random() * 60)));
-
-    // Gõ nội dung mới mô phỏng người thật gõ theo cụm ký tự với độ trễ ngẫu nhiên
-    const textToType = String(prompt || '');
-    for (let i = 0; i < textToType.length; i += 3) {
-      const chunk = textToType.slice(i, i + 3);
-      await this.call('Input.insertText', { text: chunk });
-      const delay = 25 + Math.floor(Math.random() * 55);
-      await new Promise(r => setTimeout(r, delay));
-    }
-
-    await new Promise(r => setTimeout(r, 200 + Math.floor(Math.random() * 200)));
-    return await this.bridge({ action: 'confirmFill', prompt });
+    const text = String(prompt || '').replace(/\r/g, '');
+    if (!text.trim()) throw new Error('Prompt trống.');
+    await this.bridge({ action: 'prepareFill' });
+    await this.call('Page.bringToFront', {});
+    const selection = await this.bridge({ action: 'selectPrompt' });
+    if (!selection.focused) throw new Error('Ô nhập prompt chưa nhận tiêu điểm; chưa nhập hoặc gửi lệnh.');
+    await this.call('Input.insertText', { text });
+    return await this.bridge({ action: 'confirmFill', prompt: text });
   }
 
   async uploadImage(imagePath, slot = 'reference') {

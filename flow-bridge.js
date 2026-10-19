@@ -138,6 +138,13 @@
     if(request.action==='prepareFill'){
       closeOverlays();await sleep(250);const e=promptEditor();e.scrollIntoView({block:'nearest'});const rect=e.getBoundingClientRect(),x=rect.left+Math.min(rect.width/2,30),y=rect.top+Math.min(rect.height/2,15);const hit=document.elementFromPoint(x,y);if(!hit||!(hit===e||e.contains(hit)))throw Error('Ô prompt bị bảng khác che.');return {ok:true,data:{x,y}};
     }
+    if(request.action==='selectPrompt'){
+      const editor=promptEditor();editor.focus();
+      if(document.activeElement!==editor&&!editor.contains(document.activeElement))throw Error('Không thể đặt tiêu điểm vào đúng ô prompt.');
+      const selection=getSelection();if(!selection)throw Error('Không chọn được nội dung ô prompt.');
+      const range=document.createRange();range.selectNodeContents(editor);selection.removeAllRanges();selection.addRange(range);
+      return {ok:true,data:{focused:true}};
+    }
     if(request.action==='confirmFill'){
       await wait(()=>promptText()===request.prompt.replace(/\r/g,'').trim(),'Chrome đã nhập nhưng Flow chưa xác nhận prompt khớp.');return {ok:true,data:{confirmed:true}};
     }
