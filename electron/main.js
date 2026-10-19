@@ -8,7 +8,8 @@ const { activeStates } = require('./job-utils');
 const selectedImages = new Set();
 const resultSelections = new Map();
 const resultDownloads = new Set();
-const { downloadBrowserAsset } = require('./browser-download');
+const { downloadWithRefresh } = require('./browser-download');
+const { appendJobLog, jobLogPath, readLogFile, logRoot } = require('./job-log');
 
 const Store = require('./store');
 const BrowserManager = require('./browser-manager');
@@ -120,6 +121,12 @@ function imagePreview(value) {
 }
 
 function registerIpc() {
+  ipcMain.handle('app:version', async () => app.getVersion?.() || 'dev');
+  ipcMain.handle('logs:job', async (event, jobId) => {
+    if (!store.data.Queue.some(job => job.Id === jobId)) throw new Error('Không tìm thấy job.');
+    return readLogFile(jobLogPath(store, jobId));
+  });
+  ipcMain.handle('logs:errors', async () => readLogFile(path.join(logRoot(store), 'errors.log')));
   ipcMain.handle('flow:results-list', async (event, accountId) => {
     const account = store.data.Accounts.find(item => item.Id === accountId);
     if (!account) throw new Error('Chọn tài khoản trước khi đọc kết quả.');
@@ -142,9 +149,15 @@ function registerIpc() {
     try {
       client = await browserManager.connectFlowTab(account, { projectUrl: selection.url });
       const folder = path.join(store.data.OutputFolder, 'flow-downloads', crypto.randomUUID());
-      const result = await downloadBrowserAsset({ page: client, browserAddress: account.BrowserId, asset,
+      const downloadLog = { Id: 'download_' + crypto.randomUUID(), AccountId: accountId };
+      const result = await downloadWithRefresh({ page: client, browserAddress: account.BrowserId, asset,
         destination: path.join(folder, asset.kind === 'video' ? 'video_1080p.mp4' : 'image.png'),
-        onProgress: progress => sendToRenderer('download-progress', { accountId, assetKey, ...progress }) });
+        onProgress: progress => sendToRenderer('download-progress', { accountId, assetKey, ...progress }),
+        onAttemptError: (error, attempt) => {
+          try { appendJobLog(store, downloadLog, 'Tải tệp', `Lần ${attempt}: ${error.message}`, 'error'); } catch (logError) { sendToRenderer('log', '[Log] ' + logError.message); }
+          sendToRenderer('log', `[Download] ${error.message}`);
+        },
+        onRetry: () => sendToRenderer('download-progress', { accountId, assetKey, percent: null, message: 'Tải 1080p lỗi; đang làm mới tab một lần rồi tải lại.' }) });
       sendToRenderer('log', `[Download] Đã tải ${asset.kind === 'video' ? 'video 1080p' : 'ảnh'}: ${result.path}`);
       return { ...result, folder };
     } finally { if (client) client.dispose(); resultDownloads.delete(accountId); }
@@ -349,6 +362,7 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   store = new Store();
+  sendToRenderer('log', '[App] FlowDesk Studio ' + (app.getVersion?.() || 'dev'));
   browserManager = new BrowserManager(store);
   jobRunner = new JobRunner(store, browserManager, (event, data) => {
     sendToRenderer(event, data);

@@ -191,15 +191,25 @@
       return {ok:true,data:{cards,signatures,urls:[...document.querySelectorAll('video,video source,img')].map(e=>e.currentSrc||e.src).filter(Boolean)}};
     }
     if(request.action==='jobStatus'){
+      const notices=list('[role="alert"],mat-snack-bar-container').map(e=>(e.innerText||e.textContent||'').trim()).filter(t=>/không thành công|không thể|thất bại|lỗi|failed|error|went wrong|unable|couldn.t|unusual|hoạt động bất thường|quá nhanh|too many|too fast|rate limit/i.test(t));
+      if(notices.length)return {ok:true,data:{assets:[],urls:[],error:notices.join('\n')}};
       const target=norm(request.prompt),sent=window.__flowdeskSubmission;
       const candidates=resultCards().filter(e=>!(request.baselineCards||[]).includes(tileId(e))&&!(request.baselineSignatures||[]).includes(cardSignature(e)));
       const cards=candidates.filter(e=>norm(e.getAttribute('aria-label')||e.querySelector('[data-prompt]')?.getAttribute('data-prompt')||e.querySelector('.prompt-text,.asset-prompt')?.textContent)===target||(sent&&norm(sent.prompt)===target));
       const assets=[],progress=[];
-      for(const card of cards){const error=card.querySelector('flow-error-tile .error-message,.error-message,[role="alert"]');if(error)return {ok:true,data:{assets:[],urls:[],error:norm(error.innerText)}};const asset=readyAsset(card);if(asset&&asset.kind===request.kind){assets.push(asset);progress.push(100);}else{const n=cardProgress(card);if(n!==null)progress.push(n);}}
+      for(const card of cards){const error=card.querySelector('flow-error-tile .error-message,.error-message,[role="alert"]');if(error)return {ok:true,data:{assets:[],urls:[],error:(error.innerText||error.textContent||'').trim()}};const asset=readyAsset(card);if(asset&&asset.kind===request.kind){assets.push(asset);progress.push(100);}else{const n=cardProgress(card);if(n!==null)progress.push(n);}}
       return {ok:true,data:{assets,urls:[],progress:progress.length?Math.min(...progress):null,message:assets.length?'Flow đã tạo kết quả; chuẩn bị tải tệp.':cards.length?'Đang tạo trên Flow.':'Chờ thẻ mới của lần gửi; chưa ghép kết quả cũ.'}};
     }
     if(request.action==='listResults'){
       return {ok:true,data:{assets:resultCards().map(readyAsset).filter(Boolean),url:location.href}};
+    }
+    if(request.action==='restoreObservation'){
+      window.__flowdeskSubmission={prompt:request.prompt,tiles:[]};return {ok:true,data:{restored:true}};
+    }
+    if(request.action==='downloadStatus'){
+      const card=resultCards().find(e=>tileId(e)===request.assetKey);
+      const errors=[...(card?[...card.querySelectorAll('flow-error-tile .error-message')]:[]),...list('[role="alert"],mat-snack-bar-container')].map(e=>(e.innerText||e.textContent||'').trim()).filter(t=>/không thành công|không thể|thất bại|lỗi|failed|error|went wrong|unable|couldn.t|unusual|hoạt động bất thường/i.test(t));
+      return {ok:true,data:{error:errors.join('\n')}};
     }
     if(request.action==='scrollResults'){
       const card=resultCards()[0];let viewport=card?.parentElement;

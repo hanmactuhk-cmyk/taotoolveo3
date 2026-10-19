@@ -161,3 +161,35 @@ test('remounted tile cannot be counted twice toward x2 results',async()=>{
   f.runner.downloadAsset=async(page,account,asset,target)=>{downloads++;fs.writeFileSync(target,'fixture');return {path:target};};
   await f.runner.monitorJob(page,f.job);assert.equal(polls,3);assert.equal(downloads,2);assert.equal(f.job.Results.length,2);
 });
+
+test('two automatic parallel jobs use different enabled accounts',async()=>{
+ const f=fixture();f.store.data.Accounts.push({...f.account,Id:'account-b',Name:'B'});
+ const second={...f.job,Id:'job-second',Results:[],Attempts:[]};f.store.data.Queue.push(second);
+ let release;f.hold(new Promise(resolve=>release=resolve));const task=f.runner.runQueue({concurrent:2});
+ while(f.calls.filter(c=>c.action==='connect').length<2)await new Promise(r=>setTimeout(r,1));
+ assert.equal(f.job.AccountId,'account-a');assert.equal(second.AccountId,'account-b');release();await task;
+ assert.equal(f.job.State,'Hoàn tất');assert.equal(second.State,'Hoàn tất');
+});
+
+test('one account gets two separate job tabs while prompt entry is serialized',async()=>{
+ const f=fixture(),second={...f.job,Id:'job-second',Results:[],Attempts:[]};f.store.data.Queue.push(second);
+ const connect=f.browser.connectFlowTab.bind(f.browser);let release,fills=0;const gate=new Promise(r=>release=r);
+ f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.bridge=async request=>{if(request.action==='fill'){fills++;if(fills===1)await gate;}return bridge(request);};return client;};
+ const task=f.runner.runQueue({concurrent:2});
+ while(f.calls.filter(c=>c.action==='connect').length<2||fills===0)await new Promise(r=>setTimeout(r,1));
+ assert.equal(fills,1);assert(f.calls.filter(c=>c.action==='connect').every(c=>c.options.newTab));release();await task;
+ assert.equal(fills,2);assert.notEqual(f.job.Url,second.Url);assert.equal(f.job.AccountId,second.AccountId);
+});
+
+test('account picker rotates ties and respects explicitly selected account',()=>{
+ const f=fixture();f.store.data.Accounts.push({...f.account,Id:'b'},{...f.account,Id:'c'});
+ assert.deepEqual([f.runner.pickAccount(f.job).Id,f.runner.pickAccount(f.job).Id,f.runner.pickAccount(f.job).Id],['account-a','b','c']);
+ assert.equal(f.runner.pickAccount({...f.job,AccountId:'b'}).Id,'b');
+});
+
+test('original Flow error and stage are kept in separate per-job and error logs',async()=>{
+ const f=fixture(),message='Không thể tạo video.\nMáy chủ trả về lỗi thử nghiệm.';
+ const connect=f.browser.connectFlowTab.bind(f.browser);f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.bridge=async request=>request.action==='jobStatus'?{error:message}:bridge(request);return client;};
+ await f.runner.runQueue();assert.equal(f.job.Note,message);assert.equal(f.job.LastError.message,message);assert.equal(f.job.LastError.stage,'Theo dõi Flow');
+ assert(fs.readFileSync(f.job.LogFile,'utf8').includes(message));assert(fs.readFileSync(path.join(f.store.data.OutputFolder,'logs/errors.log'),'utf8').includes(message));
+});

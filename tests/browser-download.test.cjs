@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { downloadBrowserAsset, validateFile, videoSize, serialized } = require('../electron/browser-download');
+const { downloadBrowserAsset, downloadWithRefresh, validateFile, videoSize, serialized } = require('../electron/browser-download');
 const { clearHttpCache } = require('../electron/browser-cache');
 
 function mp4(width, height) {
@@ -58,4 +58,35 @@ test('downloads on one browser serialize; different browsers can run independent
 test('post-generation cleanup clears only HTTP cache and never authentication storage', async () => {
   const commands=[];await clearHttpCache({async call(...args){commands.push(args);}});
   assert.deepEqual(commands,[['Network.clearBrowserCache',{}]]);
+});
+
+function refreshFixture(){
+ const commands=[],actions=[],errors=[];let attempts=0;
+ const asset={key:'old-key',fingerprint:'fingerprint',label:'My video',kind:'video'};
+ const page={events:[],async call(method,params){commands.push([method,params]);},async bridge(request){actions.push(request.action);return {assets:[{...asset,key:'new-key'}]};}};
+ return {commands,actions,errors,asset,page,get attempts(){return attempts;},options:{page,browserAddress:'ws://127.0.0.1/test',asset,destination:'unused.mp4',onAttemptError:(error,attempt)=>errors.push({message:error.message,attempt}),attemptDownload:async options=>{attempts++;if(attempts===1)throw Error('Upscale 1080p failed');assert.equal(options.asset.key,'new-key');return {path:'saved.mp4'};}}};
+}
+test('1080p failure refreshes the same tab once and downloads without creating again',async()=>{
+ const f=refreshFixture();const result=await downloadWithRefresh(f.options);
+ assert.equal(result.path,'saved.mp4');assert.equal(f.attempts,2);assert.equal(f.commands.filter(c=>c[0]==='Page.reload').length,1);
+ assert.deepEqual(f.actions,['listResults']);assert.equal(f.errors[0].message,'Upscale 1080p failed');
+});
+test('failed second download stops after one refresh and preserves its error',async()=>{
+ const f=refreshFixture();let attempts=0;f.options.attemptDownload=async()=>{attempts++;throw Error('1080p download failed');};
+ await assert.rejects(downloadWithRefresh(f.options),/download failed/);assert.equal(attempts,2);assert.equal(f.commands.filter(c=>c[0]==='Page.reload').length,1);assert.deepEqual(f.errors.map(e=>e.attempt),[1,2]);
+});
+test('sign-in, permissions, credits and security errors are not retried',async()=>{
+ for(const message of ['hoạt động bất thường','reCAPTCHA required','Flow khóa bản 1080p','Không đủ tín dụng','HTTP 403 download denied']){
+  const f=refreshFixture();let attempts=0;f.options.attemptDownload=async()=>{attempts++;throw Error(message);};
+  await assert.rejects(downloadWithRefresh(f.options),error=>error.message===message);assert.equal(attempts,1);assert(!f.commands.some(c=>c[0]==='Page.reload'));
+ }
+});
+test('ambiguous video identity after refresh cannot download another result',async()=>{
+ const f=refreshFixture();f.options.refreshWaitMs=0;f.page.bridge=async()=>({assets:[{...f.asset,key:'a',fingerprint:'different-a'},{...f.asset,key:'b',fingerprint:'different-b'}]});
+ await assert.rejects(downloadWithRefresh(f.options),/đúng video/);assert.equal(f.attempts,1);
+});
+
+test('Flow download alert retains exact server text and remains a download-only retry',async()=>{
+ const f=refreshFixture();let attempts=0;f.options.attemptDownload=async()=>{attempts++;if(attempts===1){const error=Error('Something went wrong');error.code='FLOW_DOWNLOAD_ERROR';throw error;}return {path:'saved.mp4'};};
+ await downloadWithRefresh(f.options);assert.equal(attempts,2);assert.equal(f.errors[0].message,'Something went wrong');
 });

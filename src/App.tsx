@@ -106,9 +106,21 @@ export default function App() {
   const [flowDownload, setFlowDownload] = useState<string | null>(null);
   const [flowDownloadProgress, setFlowDownloadProgress] = useState<number | null>(null);
   const [flowDownloadMessage, setFlowDownloadMessage] = useState('');
+  const [appVersion, setAppVersion] = useState('');
+  const [logView, setLogView] = useState<{title: string; text: string; path: string; jobId?: string; globalErrors?: boolean} | null>(null);
   useEffect(() => {
-    return (window as any).electronAPI?.onEvent('download-progress', (data: any) => setFlowDownloadProgress(data.percent));
+    const api = (window as any).electronAPI;
+    api?.getVersion?.().then(setAppVersion).catch(() => {});
+    return api?.onEvent('download-progress', (data: any) => { setFlowDownloadProgress(data.percent); if (data.message) setFlowDownloadMessage(data.message); });
   }, []);
+  useEffect(() => {
+    if (!logView) return;
+    const api = (window as any).electronAPI;
+    const timer = setInterval(async () => {
+      try { const next = logView.jobId ? await api.getJobLog(logView.jobId) : await api.getErrorLog(); setLogView(current => current?.title === logView.title ? {...current, ...next} : current); } catch {}
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [logView?.jobId, logView?.globalErrors]);
   const [catalogs, setCatalogs] = useState<Record<string, Array<{name: string; disabled?: boolean}>>>({});
   const [imagePreviews, setImagePreviews] = useState<Record<string, string>>({});
   const [splitMode, setSplitMode] = useState<string>('Đoạn trống / 1 prompt');
@@ -357,6 +369,15 @@ export default function App() {
     } catch (error: any) { addLog('[Kết quả Flow] ' + error.message); alert(error.message); }
   };
 
+  const handleOpenLog = async (jobId?: string) => {
+    const api = (window as any).electronAPI;
+    if (!api?.getJobLog || !api?.getErrorLog) { addLog('Log riêng cần bản Electron mới.'); return; }
+    try {
+      const result = jobId ? await api.getJobLog(jobId) : await api.getErrorLog();
+      setLogView({title: jobId ? 'Log job ' + jobId.slice(0, 12) : 'Nhật ký lỗi riêng', jobId, globalErrors: !jobId, ...result});
+    } catch (error: any) { addLog(error.message); }
+  };
+
   const handleDownloadFlowResult = async (assetKey: string) => {
     if (!flowResults || flowDownload) return;
     setFlowDownload(assetKey); setFlowDownloadProgress(null); setFlowDownloadMessage('Đang chuẩn bị tệp trên Flow...');
@@ -489,6 +510,11 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#131924] text-slate-100 font-sans select-none overflow-hidden">
+      {logView && <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"><div className="bg-[#1C2534] rounded-xl p-5 border border-slate-600 w-full max-w-5xl">
+        <div className="flex justify-between mb-3"><h2 className="font-bold">{logView.title}</h2><button onClick={() => setLogView(null)} className="px-3 py-1 border border-slate-500 rounded">Đóng</button></div>
+        <p className="text-xs text-slate-400 mb-2 break-all select-text">{logView.path}</p>
+        <textarea readOnly value={logView.text} className="w-full h-[60vh] bg-[#131924] p-3 font-mono text-xs text-slate-200 rounded border border-slate-700 select-text" />
+      </div></div>}
       {flowResults && <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-8">
         <div className="bg-[#1C2534] border border-[#3A4A63] rounded-xl p-5 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
           <div className="flex justify-between items-center mb-3"><h2 className="font-bold">Kết quả trong dự án Flow đang mở</h2><button disabled={!!flowDownload} onClick={() => setFlowResults(null)} className="px-3 py-1 rounded border border-slate-500">Đóng</button></div>
@@ -510,7 +536,7 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-wide text-white flex items-center gap-2">
-              FlowDesk Studio <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono">Electron CDP</span>
+              FlowDesk Studio {appVersion && <span className="text-xs text-slate-400">{appVersion}</span>} <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-mono">Electron CDP</span>
             </h1>
             <p className="text-[11px] text-slate-400">Điều khiển Chrome qua CDP • Trạng thái từ Flow và tệp tải thực tế</p>
           </div>
@@ -702,6 +728,8 @@ export default function App() {
                     <option value="2">2 luồng</option>
                     <option value="3">3 luồng</option>
                     <option value="4">4 luồng</option>
+                    <option value="6">6 luồng</option>
+                    <option value="8">8 luồng</option>
                   </select>
                 </div>
 
@@ -900,6 +928,7 @@ export default function App() {
                           <td className="py-2.5 px-2.5 align-top">
                             <div className="font-mono text-cyan-400 font-semibold text-[11px]">#{idx + 1} • {q.Id.slice(0, 8)}</div>
                             <div className="text-slate-400 text-[10px]">{q.Model} • {q.Ratio}</div>
+                            <div className="text-cyan-300 text-[10px]">{accounts.find(account => account.Id === q.AccountId)?.Name || 'Tự chọn tài khoản'}</div>
                           </td>
 
                           {/* Image slots */}
@@ -1019,6 +1048,7 @@ export default function App() {
                           {/* Actions */}
                           <td className="py-2.5 px-2.5 align-top text-right">
                             <div className="flex items-center justify-end gap-1">
+                              <button onClick={() => handleOpenLog(q.Id)} title="Log riêng của job" className="p-1.5 bg-[#242E40] hover:bg-[#2D3B52] text-cyan-300 rounded"><FileText className="w-3.5 h-3.5" /></button>
                               <button
                                 onClick={() => handleRetryJob(q.Id)}
                                 title="Tạo lại job này (tạo mã lần chạy mới & lưu lịch sử)"
@@ -1407,6 +1437,7 @@ export default function App() {
                   <h2 className="text-base font-bold text-white flex items-center gap-2">
                     <Terminal className="w-4 h-4 text-cyan-400" /> Nhật ký hệ thống & Thư mục kết quả
                   </h2>
+                  <button onClick={() => handleOpenLog()} className="mt-2 px-3 py-1.5 rounded border border-rose-500/40 bg-rose-900/20 text-rose-300 text-xs">Nhật ký lỗi riêng</button>
                   <p className="text-xs text-slate-400">Toàn bộ thông điệp CDP, tiến trình thực thi và lỗi được ghi lại theo thời gian thực.</p>
                 </div>
                 <div className="flex items-center gap-2">

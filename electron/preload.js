@@ -13,6 +13,9 @@ try {
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
   platform: process.platform,
+  getVersion: () => ipcRenderer.invoke('app:version'),
+  getJobLog: (jobId) => ipcRenderer.invoke('logs:job', jobId),
+  getErrorLog: () => ipcRenderer.invoke('logs:errors'),
 
   // Quản lý tài khoản
   openRegularProfile: (accountId) => ipcRenderer.invoke('account:open-regular', accountId),
