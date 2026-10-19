@@ -6,6 +6,9 @@ const { checkAccount, clearCaptchaSession } = require('./account-service');
 const { syncDrafts } = require('./drafts');
 const { activeStates } = require('./job-utils');
 const selectedImages = new Set();
+const resultSelections = new Map();
+const resultDownloads = new Set();
+const { downloadBrowserAsset } = require('./browser-download');
 
 const Store = require('./store');
 const BrowserManager = require('./browser-manager');
@@ -117,6 +120,35 @@ function imagePreview(value) {
 }
 
 function registerIpc() {
+  ipcMain.handle('flow:results-list', async (event, accountId) => {
+    const account = store.data.Accounts.find(item => item.Id === accountId);
+    if (!account) throw new Error('Chọn tài khoản trước khi đọc kết quả.');
+    if (jobRunner.accountBusy(accountId) || resultDownloads.has(accountId)) throw new Error('Đợi tác vụ của tài khoản này hoàn tất.');
+    const client = await browserManager.connectFlowTab(account, { existingProject: true });
+    try {
+      const result = await client.bridge({ action: 'listResults' });
+      resultSelections.set(accountId, result);
+      return result;
+    } finally { client.dispose(); }
+  });
+  ipcMain.handle('flow:results-download', async (event, { accountId, assetKey }) => {
+    const account = store.data.Accounts.find(item => item.Id === accountId);
+    const selection = resultSelections.get(accountId);
+    const asset = selection?.assets.find(item => item.key === assetKey);
+    if (!account || !asset) throw new Error('Đọc lại danh sách kết quả trước khi tải.');
+    if (jobRunner.accountBusy(accountId) || resultDownloads.has(accountId)) throw new Error('Đợi tác vụ của tài khoản này hoàn tất.');
+    resultDownloads.add(accountId);
+    let client;
+    try {
+      client = await browserManager.connectFlowTab(account, { projectUrl: selection.url });
+      const folder = path.join(store.data.OutputFolder, 'flow-downloads', crypto.randomUUID());
+      const result = await downloadBrowserAsset({ page: client, browserAddress: account.BrowserId, asset,
+        destination: path.join(folder, asset.kind === 'video' ? 'video_1080p.mp4' : 'image.png'),
+        onProgress: progress => sendToRenderer('download-progress', { accountId, assetKey, ...progress }) });
+      sendToRenderer('log', `[Download] Đã tải ${asset.kind === 'video' ? 'video 1080p' : 'ảnh'}: ${result.path}`);
+      return { ...result, folder };
+    } finally { if (client) client.dispose(); resultDownloads.delete(accountId); }
+  });
   ipcMain.handle('images:select', async (event, { multiple = false } = {}) => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Chọn ảnh cho job', properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
@@ -193,7 +225,7 @@ function registerIpc() {
   ipcMain.handle('account:open-regular', async (event, accountId) => {
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (!acc) throw new Error('Không tìm thấy tài khoản.');
-    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ này kết thúc trước khi mở.');
+    if (jobRunner.accountBusy(accountId) || resultDownloads.has(accountId)) throw new Error('Đợi job/tải tệp của hồ sơ này kết thúc trước khi mở.');
     const result = await browserManager.openRegular(acc);
     sendToRenderer('account-updated', acc);
     return result;
@@ -202,7 +234,7 @@ function registerIpc() {
   ipcMain.handle('account:open-login', async (event, accountId) => {
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (!acc) throw new Error('Không tìm thấy tài khoản.');
-    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job đang chạy trước khi mở lại hồ sơ.');
+    if (jobRunner.accountBusy(accountId) || resultDownloads.has(accountId)) throw new Error('Đợi job/tải tệp trước khi mở lại hồ sơ.');
     return await browserManager.openLogin(acc);
   });
 
@@ -224,14 +256,14 @@ function registerIpc() {
   });
 
   ipcMain.handle('account:close', async (event, accountId) => {
-    if (jobRunner.accountBusy(accountId)) throw new Error('Đợi job của hồ sơ kết thúc trước khi đóng Chrome.');
+    if (jobRunner.accountBusy(accountId) || resultDownloads.has(accountId)) throw new Error('Đợi job/tải tệp của hồ sơ kết thúc trước khi đóng Chrome.');
     const acc = store.data.Accounts.find(a => a.Id === accountId);
     if (acc) await browserManager.close(acc);
     return { success: true };
   });
 
   ipcMain.handle('account:delete', async (event, accountId) => {
-    if (jobRunner.accountBusy(accountId)) throw new Error('Không xóa tài khoản đang chạy job.');
+    if (jobRunner.accountBusy(accountId) || resultDownloads.has(accountId)) throw new Error('Không xóa tài khoản đang chạy job/tải tệp.');
     store.data.Accounts = store.data.Accounts.filter(a => a.Id !== accountId);
     store.save();
     return { success: true };
@@ -297,6 +329,7 @@ function registerIpc() {
 
   // Runner controls
   ipcMain.handle('runner:start', async (event, options) => {
+    if (resultDownloads.size) throw new Error('Đợi tải kết quả Flow hoàn tất trước khi chạy hàng chờ.');
     for (const job of store.data.Queue) if ((!options.kind || job.Kind === options.kind) && job.AutoDraft) job.AutoDraft = false;
     store.save();
     jobRunner.runQueue(options).catch(error => sendToRenderer('log', '[Runner] ' + error.message));
@@ -332,4 +365,3 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
-

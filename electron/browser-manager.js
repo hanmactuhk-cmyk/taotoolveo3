@@ -266,11 +266,16 @@ class BrowserManager {
     throw new Error('Tab của job chưa tải xong Flow sau 25 giây; lệnh chưa được gửi.');
   }
 
-  async connectFlowTab(account, { projectUrl = '', newTab = false } = {}) {
+  async connectFlowTab(account, { projectUrl = '', newTab = false, existingProject = false } = {}) {
     if (projectUrl && !isFlowUrl(projectUrl)) throw new Error('URL dự án Flow không hợp lệ.');
     await this.enableControl(account);
     const CdpClient = require('./cdp-client');
     let pages = await this.readHttpJson(account.Port, '/json/list');
+    if (existingProject) {
+      const projects = (Array.isArray(pages) ? pages : []).filter(page => page.type === 'page' && isFlowUrl(page.url) && /\/project\/[^/]+\/?$/.test(new URL(page.url).pathname));
+      if (projects.length !== 1) throw new Error('Mở đúng một tab danh sách kết quả của dự án Flow trong hồ sơ này trước khi tải.');
+      projectUrl = projects[0].url;
+    }
     let target = (Array.isArray(pages) ? pages : []).find(page => page.type === 'page' &&
       (projectUrl ? page.url === projectUrl : !newTab && isFlowUrl(page.url)));
     if (!target) {
@@ -312,4 +317,3 @@ class BrowserManager {
 }
 
 module.exports = BrowserManager;
-

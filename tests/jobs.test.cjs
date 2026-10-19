@@ -146,3 +146,18 @@ test('stop drains already submitted worker without sending next queued job', asy
   assert.equal(f.job.State, 'Hoàn tất'); assert.equal(other.State, 'Hàng đợi'); assert.equal(f.runner.running, false);
 });
 
+test('native result assets download before completion and HTTP cache cleanup', async () => {
+  const f=fixture();f.account.BrowserId='ws://127.0.0.1/browser/fixture';
+  const connect=f.browser.connectFlowTab.bind(f.browser);let saved=false;const cache=[];
+  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.call=async method=>{cache.push(method);assert(saved);};client.bridge=async request=>request.action==='jobStatus'?{assets:[{key:'tile-1',fingerprint:'media-1',kind:'image'}],progress:100}:bridge(request);return client;};
+  f.runner.downloadAsset=async(page,account,asset,target,onProgress)=>{onProgress({percent:42});assert.equal(f.job.State,'Đang chạy');fs.writeFileSync(target,'fixture');saved=true;return {path:target};};
+  await f.runner.runQueue({kind:'image'});
+  assert.equal(f.job.State,'Hoàn tất');assert.equal(f.job.DownloadProgress,100);assert.deepEqual(cache,['Network.clearBrowserCache']);
+});
+
+test('remounted tile cannot be counted twice toward x2 results',async()=>{
+  const f=fixture('x2');f.account.BrowserId='ws://127.0.0.1/browser/fixture';f.job.AccountId=f.account.Id;f.job.Folder=f.store.data.OutputFolder;let polls=0,downloads=0;
+  const page={async bridge(request){if(request.action==='scrollResults')return {};polls++;return {assets:polls<3?[{key:'tile-'+polls,fingerprint:'same-media',kind:'image'}]:[{key:'other',fingerprint:'second-media',kind:'image'}]};}};
+  f.runner.downloadAsset=async(page,account,asset,target)=>{downloads++;fs.writeFileSync(target,'fixture');return {path:target};};
+  await f.runner.monitorJob(page,f.job);assert.equal(polls,3);assert.equal(downloads,2);assert.equal(f.job.Results.length,2);
+});

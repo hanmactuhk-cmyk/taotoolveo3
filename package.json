@@ -1,7 +1,7 @@
 {
   "name": "flowdesk-studio",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",

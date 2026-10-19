@@ -80,6 +80,7 @@ export interface StudioTask {
   AccountId: string;
   Folder: string;
   Progress: number | null;
+  DownloadProgress?: number | null;
   Results: string[];
   Submitted: boolean;
   AutoDraft?: boolean;
@@ -101,6 +102,13 @@ export default function App() {
   const [promptsText, setPromptsText] = useState<string>('');
   const draftInputs = useRef<Record<string, string>>({ video: '', image: '' });
   const [storeReady, setStoreReady] = useState(false);
+  const [flowResults, setFlowResults] = useState<{accountId: string; assets: Array<{key: string; kind: string; label: string}>} | null>(null);
+  const [flowDownload, setFlowDownload] = useState<string | null>(null);
+  const [flowDownloadProgress, setFlowDownloadProgress] = useState<number | null>(null);
+  const [flowDownloadMessage, setFlowDownloadMessage] = useState('');
+  useEffect(() => {
+    return (window as any).electronAPI?.onEvent('download-progress', (data: any) => setFlowDownloadProgress(data.percent));
+  }, []);
   const [catalogs, setCatalogs] = useState<Record<string, Array<{name: string; disabled?: boolean}>>>({});
   const [imagePreviews, setImagePreviews] = useState<Record<string, string>>({});
   const [splitMode, setSplitMode] = useState<string>('Đoạn trống / 1 prompt');
@@ -340,6 +348,26 @@ export default function App() {
     addLog(`[Job] Đã xóa tác vụ ${jobId.slice(0, 8)}.`);
   };
 
+  const handleListFlowResults = async (accId: string) => {
+    const api = (window as any).electronAPI;
+    if (!api?.listFlowResults) { addLog('Tải kết quả có sẵn cần bản Electron mới.'); return; }
+    try {
+      const result = await api.listFlowResults(accId);
+      setFlowResults({ accountId: accId, assets: result.assets }); setFlowDownloadMessage('');
+    } catch (error: any) { addLog('[Kết quả Flow] ' + error.message); alert(error.message); }
+  };
+
+  const handleDownloadFlowResult = async (assetKey: string) => {
+    if (!flowResults || flowDownload) return;
+    setFlowDownload(assetKey); setFlowDownloadProgress(null); setFlowDownloadMessage('Đang chuẩn bị tệp trên Flow...');
+    try {
+      const result = await (window as any).electronAPI.downloadFlowResult(flowResults.accountId, assetKey);
+      setFlowDownloadMessage('Đã tải: ' + result.path);
+      addLog('[Download] ' + result.path);
+    } catch (error: any) { setFlowDownloadMessage(error.message); addLog('[Download] ' + error.message); }
+    finally { setFlowDownload(null); }
+  };
+
   const handleOpenRegularProfile = async (accId: string) => {
     setSelectedAccId(accId);
     const api = (window as any).electronAPI;
@@ -461,6 +489,18 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#131924] text-slate-100 font-sans select-none overflow-hidden">
+      {flowResults && <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-8">
+        <div className="bg-[#1C2534] border border-[#3A4A63] rounded-xl p-5 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-3"><h2 className="font-bold">Kết quả trong dự án Flow đang mở</h2><button disabled={!!flowDownload} onClick={() => setFlowResults(null)} className="px-3 py-1 rounded border border-slate-500">Đóng</button></div>
+          <p className="text-xs text-slate-400 mb-3">Video tải bản 1080p; ảnh tải bản gốc. Không tạo lại ảnh/video.</p>
+          {!flowResults.assets.length && <p className="text-sm text-slate-300">Chưa có kết quả đã tải xong trên trang. Mở dự án có kết quả rồi đọc lại.</p>}
+          {flowResults.assets.map(asset => <div key={asset.key} className="flex items-center justify-between gap-3 border-t border-slate-700 py-3">
+            <span className="text-xs break-words">{asset.kind === 'video' ? 'Video' : 'Ảnh'} — {asset.label || 'Kết quả'}</span>
+            <button disabled={!!flowDownload} onClick={() => handleDownloadFlowResult(asset.key)} className="shrink-0 px-3 py-2 rounded bg-cyan-700 text-xs disabled:opacity-50">{flowDownload === asset.key ? (flowDownloadProgress === null ? 'Chuẩn bị...' : `Đang tải ${flowDownloadProgress}%`) : asset.kind === 'video' ? 'Tải 1080p' : 'Tải ảnh'}</button>
+          </div>)}
+          {flowDownloadMessage && <p className="text-xs mt-3 text-cyan-200 break-all select-text">{flowDownloadMessage}</p>}
+        </div>
+      </div>}
       {!(window as any).electronAPI && <div className="bg-amber-900/60 text-amber-200 px-4 py-2 text-xs">Bản xem thử giao diện: tài khoản, tiến độ và kết quả mô phỏng không phải kết quả Flow thật. Chạy bản Electron để dùng Chrome/CDP.</div>}
       {/* Header Bar */}
       <header className="h-14 bg-[#1C2534] border-b border-[#2B374B] flex items-center justify-between px-4 shrink-0 z-20">
@@ -967,8 +1007,10 @@ export default function App() {
                               q.State === 'Đang chạy' || q.State === 'Đang gửi' ? 'bg-cyan-500/20 text-cyan-400 animate-pulse' :
                               q.State === 'Lỗi' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-700/40 text-slate-300'
                             }`}>
-                              {q.State} {q.Progress !== null && q.Progress > 0 ? `(${q.Progress}%)` : ''}
+                              {q.State} {q.Progress !== null && q.Progress !== undefined ? `(${q.Progress}%)` : ''}
                             </span>
+                            {q.Progress !== null && q.Progress !== undefined && <progress className="block w-full h-1.5 mt-2 accent-cyan-400" max={100} value={q.Progress} aria-label="Tiến độ tạo trên Flow" />}
+                            {q.DownloadProgress !== null && q.DownloadProgress !== undefined && <div className="text-[11px] text-cyan-300 mt-1">Tải tệp: {q.DownloadProgress}%</div>}
                             <div className="text-[11px] text-slate-400 mt-1 max-w-[200px] truncate" title={q.Note}>
                               {q.Note}
                             </div>
@@ -1079,6 +1121,7 @@ export default function App() {
               </div>
 
               <div className="px-5 py-3 flex items-center gap-3">
+                  <button onClick={() => { const acc = accounts.find(a => a.Id === selectedAccId) || accounts[0]; if (acc) handleListFlowResults(acc.Id); }} className="px-3.5 py-2 rounded bg-cyan-700 text-xs font-semibold">Tải kết quả Flow</button>
                   <button
                     onClick={() => {
                       const acc = accounts.find(a => a.Id === selectedAccId) || accounts[0];
@@ -1412,4 +1455,3 @@ export default function App() {
     </div>
   );
 }
-

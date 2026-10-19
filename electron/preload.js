@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectImages: (multiple = false) => ipcRenderer.invoke('images:select', { multiple }),
   imagePreview: (filePath) => ipcRenderer.invoke('images:preview', filePath),
   syncModels: (accountId, kind) => ipcRenderer.invoke('flow:catalog', { accountId, kind }),
+  listFlowResults: (accountId) => ipcRenderer.invoke('flow:results-list', accountId),
+  downloadFlowResult: (accountId, assetKey) => ipcRenderer.invoke('flow:results-download', { accountId, assetKey }),
   openFolder: (folderPath) => ipcRenderer.invoke('store:open-folder', folderPath),
 
   // Quản lý Hàng đợi & Jobs
@@ -46,7 +48,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Lắng nghe sự kiện từ Main Process
   onEvent: (channel, callback) => {
-    const validChannels = ['log', 'queue-updated', 'account-updated', 'runner-status'];
+    const validChannels = ['log', 'queue-updated', 'account-updated', 'runner-status', 'download-progress'];
     if (validChannels.includes(channel)) {
       const subscription = (event, data) => callback(data);
       ipcRenderer.on(channel, subscription);
@@ -55,4 +57,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {};
   }
 });
-

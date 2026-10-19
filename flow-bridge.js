@@ -52,6 +52,11 @@
     return errNodes.map(text).find(t=>/hoạt động bất thường|unusual activity|sửa đổi trang|modify the page/i.test(t))||'';
   }
   function tileId(e){if(!window.__flowdeskTiles)window.__flowdeskTiles={map:new WeakMap(),next:0};const t=window.__flowdeskTiles;if(!t.map.has(e))t.map.set(e,'visible-tile-'+(++t.next));return t.map.get(e);}
+  function resultCards(){const grid=list('flow-grid-tile-container');return grid.length?grid:list('flow-tile-container');}
+  function cardSignature(card){return card.getAttribute('data-asset-id')||card.getAttribute('data-generation-id')||card.querySelector('[data-media-id]')?.getAttribute('data-media-id')||card.querySelector('flow-video-tile img.thumbnail,flow-image-tile img.image')?.getAttribute('src')||'';}
+  function cardKind(card){return card.querySelector('flow-video-tile,video')?'video':card.querySelector('flow-image-tile,img.image,img[data-result],.generated-image')?'image':null;}
+  function readyAsset(card){const kind=cardKind(card);const error=card.querySelector('flow-error-tile,.error-message');if(!kind||error||card.querySelector('flow-loading-tile,flow-progress-tile,[role="progressbar"]'))return null;const image=card.querySelector(kind==='video'?'flow-video-tile img.thumbnail,video':'flow-image-tile img.image,img[data-result],.generated-image');if(!image)return null;if(image.tagName==='IMG'&&(!image.complete||!image.naturalWidth))return null;let hash=2166136261;for(const c of cardSignature(card)){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}return {key:tileId(card),kind,fingerprint:(hash>>>0).toString(16),label:norm(card.getAttribute('aria-label')||card.querySelector('.footer-title')?.textContent||'')};}
+  function cardProgress(card){const values=[];for(const e of card.querySelectorAll('[role="progressbar"]')){const raw=e.getAttribute('aria-valuenow');if(raw!==null&&Number.isFinite(Number(raw))&&Number(raw)>=0&&Number(raw)<=100)values.push(Number(raw));}const copy=card.cloneNode(true);copy.querySelectorAll('flow-tile-hover-footer,.prompt-text,.asset-prompt').forEach(e=>e.remove());const m=norm(copy.innerText||copy.textContent).match(/(?:^|\s)(\d{1,3}(?:\.\d+)?)\s*%/);if(m&&Number(m[1])<=100)values.push(Number(m[1]));return values.length?Math.min(...values):null;}
   try {
     const accountWidget=request.accountFrame&&((location.hostname==='ogs.google.com'&&/account/.test(location.pathname))||(location.hostname==='accounts.google.com'&&/SignOutOptions/.test(location.pathname)));
     if(location.hostname!=='flow.google.com'&&location.hostname!=='labs.google'&&!accountWidget)throw Error('Hãy hoàn tất đăng nhập Google rồi mở Flow.');
@@ -175,30 +180,42 @@
       closeOverlays();return {ok:true,data:{selected}};
     }
     if(request.action==='mediaBaseline'){
-      const cards=list('[data-asset-id],[data-generation-id]').map(e=>e.getAttribute('data-asset-id')||e.getAttribute('data-generation-id')).concat(list('flow-tile-container').map(tileId));
-      return {ok:true,data:{cards,urls:[...document.querySelectorAll('video,video source,img')].map(e=>e.currentSrc||e.src).filter(Boolean)}};
+      const cards=resultCards().map(tileId),signatures=resultCards().map(cardSignature).filter(Boolean);
+      return {ok:true,data:{cards,signatures,urls:[...document.querySelectorAll('video,video source,img')].map(e=>e.currentSrc||e.src).filter(Boolean)}};
     }
     if(request.action==='jobStatus'){
-      const newTiles=list('flow-tile-container').filter(e=>!(request.baselineCards||[]).includes(tileId(e)));
-      if(newTiles.length===1){const error=newTiles[0].querySelector('flow-error-tile .error-message');if(error)return {ok:true,data:{urls:[],error:text(error),message:'Flow trả về lỗi cho thẻ mới của lần gửi.'}};}
-      const target=norm(request.prompt),baseline=new Set(request.baseline||[]);
-      const promptNodes=list('[data-prompt],.prompt-text,.asset-prompt,[class*="prompt-text"],[class*="promptText"]');
-      const matched=promptNodes.filter(e=>norm(e.getAttribute('data-prompt')||e.innerText)===target);
-      const cards=new Set();
-      for(const node of matched){const card=node.closest('[data-asset-id],[data-generation-id],article,[role="listitem"],.asset-card,.generation-card,[class*="asset-card"],[class*="assetCard"]');if(card)cards.add(card);}
-      if(!cards.size)return {ok:true,data:{urls:[],progress:null,message:'Chờ thẻ kết quả có prompt khớp; chưa có căn cứ ghép media.'}};
-      const urls=[],progress=[];
-      for(const card of cards){
-        const identity=card.getAttribute('data-asset-id')||card.getAttribute('data-generation-id');
-        if(!identity||(request.baselineCards||[]).includes(identity))continue;
-        const msg=list('[role="alert"],.error-message,[class*="error-message"]',card).map(e=>norm(e.innerText)).join(' ');
-        if(msg)return {ok:true,data:{urls:[],error:msg}};
-        for(const bar of list('[role="progressbar"]',card)){const n=Number(bar.getAttribute('aria-valuenow'));if(bar.hasAttribute('aria-valuenow')&&Number.isFinite(n)&&n>=0&&n<=100)progress.push(n);}
-        const percent=norm(card.innerText).match(/\b(\d{1,3})\s*%/);if(percent&&Number(percent[1])<=100)progress.push(Number(percent[1]));
-        const selector=request.kind==='video'?'video,video source':'img[data-result],.generated-image,[data-result] img';
-        for(const media of list(selector,card)){const url=media.currentSrc||media.src;if(url&&url.startsWith('https://')&&!baseline.has(url)&&!urls.includes(url))urls.push(url);}
+      const target=norm(request.prompt),sent=window.__flowdeskSubmission;
+      const candidates=resultCards().filter(e=>!(request.baselineCards||[]).includes(tileId(e))&&!(request.baselineSignatures||[]).includes(cardSignature(e)));
+      const cards=candidates.filter(e=>norm(e.getAttribute('aria-label')||e.querySelector('[data-prompt]')?.getAttribute('data-prompt')||e.querySelector('.prompt-text,.asset-prompt')?.textContent)===target||(sent&&norm(sent.prompt)===target));
+      const assets=[],progress=[];
+      for(const card of cards){const error=card.querySelector('flow-error-tile .error-message,.error-message,[role="alert"]');if(error)return {ok:true,data:{assets:[],urls:[],error:norm(error.innerText)}};const asset=readyAsset(card);if(asset&&asset.kind===request.kind){assets.push(asset);progress.push(100);}else{const n=cardProgress(card);if(n!==null)progress.push(n);}}
+      return {ok:true,data:{assets,urls:[],progress:progress.length?Math.min(...progress):null,message:assets.length?'Flow đã tạo kết quả; chuẩn bị tải tệp.':cards.length?'Đang tạo trên Flow.':'Chờ thẻ mới của lần gửi; chưa ghép kết quả cũ.'}};
+    }
+    if(request.action==='listResults'){
+      return {ok:true,data:{assets:resultCards().map(readyAsset).filter(Boolean),url:location.href}};
+    }
+    if(request.action==='scrollResults'){
+      const card=resultCards()[0];let viewport=card?.parentElement;
+      while(viewport&&!(viewport.scrollHeight>viewport.clientHeight&&/auto|scroll/.test(getComputedStyle(viewport).overflowY)))viewport=viewport.parentElement;
+      if(viewport){const previous=viewport.scrollTop;viewport.scrollTop+=Math.max(200,viewport.clientHeight*0.8);if(viewport.scrollTop===previous)viewport.scrollTop=0;}
+      return {ok:true,data:{scrolled:!!viewport}};
+    }
+    if(request.action==='openAssetDownload'){
+      closeOverlays();await sleep(150);
+      const card=one(resultCards().filter(e=>tileId(e)===request.assetKey),'Không tìm thấy đúng thẻ kết quả cần tải');
+      if(request.assetFingerprint&&readyAsset(card)?.fingerprint!==request.assetFingerprint)throw Error('Thẻ kết quả đã thay đổi; đọc lại danh sách trước khi tải.');
+      if(cardKind(card)!==request.kind)throw Error('Loại tệp của thẻ không khớp.');
+      const more=one([...card.querySelectorAll('button')].filter(e=>/^(Tuỳ chọn khác|Tùy chọn khác|More options)$/i.test(label(e))),'Không tìm thấy menu của thẻ');tap(more);
+      const entry=await wait(()=>list('[role="menuitem"]').find(e=>/^(Tải xuống|Download)$/i.test(text(e))),'Flow chưa mở menu tải xuống.');
+      const submenu=entry.getAttribute('aria-haspopup')==='menu';tap(entry);
+      if(request.kind==='video'){
+        const option=await wait(()=>list('[role="menuitem"]').find(e=>/^1080p$/i.test(text(e))),'Flow không có lựa chọn tải 1080p cho video này.');
+        if(disabled(option))throw Error('Flow khóa bản 1080p cho video/tài khoản này.');
+        if(/\d+\s*(tín dụng|credits)/i.test(option.innerText))throw Error('Flow yêu cầu tín dụng để tải 1080p; cần bạn xác nhận trong trình duyệt.');
+        tap(option);return {ok:true,data:{requested:true,resolution:'1080p'}};
       }
-      return {ok:true,data:{urls,progress:progress.length?Math.min(...progress):null,message:urls.length?'Đã tìm media mới trong thẻ có prompt khớp.':'Đang theo dõi thẻ có prompt khớp.'}};
+      if(submenu){const option=await wait(()=>list('[role="menuitem"]').find(e=>/^(Kích thước gốc|Kích thước gốc|Original(?: size)?|1K)$/i.test(text(e))),'Flow chưa cung cấp lựa chọn tải ảnh gốc.');tap(option);}
+      return {ok:true,data:{requested:true,resolution:'original'}};
     }
     if(request.action==='clearCaptchaSession'){
       try { localStorage.removeItem('_grecaptcha'); } catch(e) {}
@@ -239,4 +256,3 @@
     throw Error('Thao tác không được hỗ trợ.');
   } catch(error) {return {ok:false,error:error.message};}
 })(__FLOWDESK_REQUEST__)
-

@@ -23,6 +23,17 @@ test('account failure invalidates stale verification and disposes the page', asy
   assert.equal(account.CheckedUtc, null); assert.equal(disposed, true);
 });
 
+test('reading fewer than 10 credits preserves the account video permission', async () => {
+  const account={Id:'low-credit',Name:'Low',Enabled:true,Images:true,Videos:true};
+  const browser={async connectFlowTab(){return {async call(){},async bridge(){return {email:'fixture@example.invalid',plan:'Ultra',credits:3};},dispose(){}};}};
+  await checkAccount(browser,{save(){}},account);
+  assert.equal(account.Credits,3);assert.equal(account.Videos,true);assert.equal(account.Enabled,true);
+  const {verifyAccount}=require('../electron/job-utils');
+  assert.doesNotThrow(()=>verifyAccount(account,2));
+  assert.throws(()=>verifyAccount(account,10),/Không đủ tín dụng/);
+  assert.equal(account.Videos,true);
+});
+
 test('already controlled Chrome is reused without requiring its profile to be closed', async () => {
   const manager = new BrowserManager({}); manager.isOpen = async () => true;
   manager.store.profileDir = () => { throw new Error('Should not check running controlled profile'); };
