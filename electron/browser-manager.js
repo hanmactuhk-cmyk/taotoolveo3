@@ -283,7 +283,7 @@ class BrowserManager {
       let targetId;
       try {
         await control.connect(account.BrowserId);
-        const created = await control.call('Target.createTarget', { url: projectUrl || 'https://flow.google.com/' });
+        const created = await control.call('Target.createTarget', { url: projectUrl || 'https://flow.google.com/', background: newTab });
         targetId = created.targetId;
       } finally { control.dispose(); }
       for (let attempt = 0; attempt < 40; attempt++) {

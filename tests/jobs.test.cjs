@@ -21,7 +21,7 @@ function fixture(count = 'x1') {
       calls.push({ action: 'connect', options });
       let prompt;
       return {
-        async enableDiagnostics() {}, dispose() {}, async uploadImage() {},
+        async enableDiagnostics() {}, dispose() {}, async uploadImage() {}, async call() {},
         async bridge(request) {
           calls.push({ ...request, clientId });
           switch (request.action) {
@@ -149,7 +149,7 @@ test('stop drains already submitted worker without sending next queued job', asy
 test('native result assets download before completion and HTTP cache cleanup', async () => {
   const f=fixture();f.account.BrowserId='ws://127.0.0.1/browser/fixture';
   const connect=f.browser.connectFlowTab.bind(f.browser);let saved=false;const cache=[];
-  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.call=async method=>{cache.push(method);assert(saved);};client.bridge=async request=>request.action==='jobStatus'?{assets:[{key:'tile-1',fingerprint:'media-1',kind:'image'}],progress:100}:bridge(request);return client;};
+  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.call=async method=>{if(method==='Network.clearBrowserCache'){cache.push(method);assert(saved);}};client.bridge=async request=>request.action==='jobStatus'?{assets:[{key:'tile-1',fingerprint:'media-1',kind:'image'}],progress:100}:bridge(request);return client;};
   f.runner.downloadAsset=async(page,account,asset,target,onProgress)=>{onProgress({percent:42});assert.equal(f.job.State,'Đang chạy');fs.writeFileSync(target,'fixture');saved=true;return {path:target};};
   await f.runner.runQueue({kind:'image'});
   assert.equal(f.job.State,'Hoàn tất');assert.equal(f.job.DownloadProgress,100);assert.deepEqual(cache,['Network.clearBrowserCache']);

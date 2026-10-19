@@ -47,6 +47,7 @@ test('two jobs connect to distinct page targets; never fall back to an existing 
     async connect(value) { this.address = value; }
     async call(method, params) {
       if (method === 'Target.createTarget') {
+        assert.equal(params.background, true);
         const id = 'new-' + ++created; pages.push({ type: 'page', id, url: params.url, webSocketDebuggerUrl: 'ws://127.0.0.1/' + id }); return { targetId: id };
       }
       if (this.address.includes('/browser/')) throw new Error('Page command on browser endpoint');

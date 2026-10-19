@@ -97,6 +97,7 @@ class JobRunner {
       cdp = await this.connectJobTab(account, job.Url); cdp.trace = message => this.record(job, job.Stage || 'CDP', message);
       await serialized('job-ui:' + account.Id, async () => {
       if (this.stopped) throw new Error('Đã dừng trước khi chuẩn bị lệnh.');
+      await cdp.call('Page.bringToFront', {});
       await cdp.enableDiagnostics();
       this.record(job, 'Đọc tài khoản', 'Đang đọc tài khoản từ tab của job.');
       const data = await cdp.bridge({ action: 'account' });
