@@ -137,10 +137,14 @@ test('retry during monitoring waits; original sent prompt is not mutated', async
 });
 
 test('stop drains already submitted worker without sending next queued job', async () => {
-  const f = fixture(); const other = { ...f.job, Id: 'job-second', Results: [], Attempts: [] }; f.store.data.Queue.push(other);
+  const f = fixture();
+  for (let i=1;i<5;i++) f.store.data.Queue.push({...f.job,Id:'stop-'+i,Results:[],Attempts:[]});
+  const other=f.store.data.Queue[4];
   let release; f.hold(new Promise(resolve => { release = resolve; }));
+  const connect=f.browser.connectFlowTab.bind(f.browser);
+  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.bridge=async request=>{if(request.action==='jobStatus')while(!f.runner.stopped)await new Promise(r=>setTimeout(r,1));return bridge(request);};return client;};
   const task = f.runner.runQueue({ concurrent: 1, kind: 'image' });
-  while (!f.calls.some(call => call.action === 'jobStatus')) await new Promise(resolve => setTimeout(resolve, 1));
+  while (f.calls.filter(call => call.action === 'submit').length<4) await new Promise(resolve => setTimeout(resolve, 1));
   f.runner.stop(); assert.equal(f.runner.running, true);
   release(); await task;
   assert.equal(f.job.State, 'Hoàn tất'); assert.equal(other.State, 'Hàng đợi'); assert.equal(f.runner.running, false);

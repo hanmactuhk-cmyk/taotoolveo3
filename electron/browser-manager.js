@@ -49,6 +49,8 @@ class BrowserManager {
   static loginArguments(profileDir) {
     return [
       `--user-data-dir=${profileDir}`,
+      '--remote-debugging-address=127.0.0.1',
+      '--remote-debugging-port=0',
       '--disable-blink-features=AutomationControlled',
       '--exclude-switches=enable-automation',
       '--disable-infobars',
@@ -108,12 +110,23 @@ class BrowserManager {
   async ensureControl(account) {
     if (await this.isOpen(account)) return;
     const profile = this.store.profileDir(account);
-    if (BrowserManager.profileInUse(profile)) {
-      throw new Error('Đóng cửa sổ Chrome của hồ sơ đã đăng nhập, rồi bấm Kết nối và đọc tài khoản.');
-    }
+    if (await this.recoverControl(account, profile)) return;
     account.LoginMode = false;
     this.store.save();
     await this.open(account);
+  }
+
+  async recoverControl(account, profile) {
+    try {
+      const lines = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split(/\r?\n/);
+      const port = Number(lines[0]);
+      if (!Number.isInteger(port) || port < 1024 || port > 65535 || !lines[1]) return false;
+      const version = await this.readHttpJson(port, '/json/version');
+      if (version.webSocketDebuggerUrl !== `ws://127.0.0.1:${port}${lines[1]}`) return false;
+      Object.assign(account, { Port: port, BrowserId: version.webSocketDebuggerUrl, LoginMode: false });
+      this.store.save();
+      return true;
+    } catch { return false; }
   }
 
   async readHttpJson(port, route) {
@@ -202,8 +215,11 @@ class BrowserManager {
       if (fs.existsSync(activePortFile)) fs.unlinkSync(activePortFile);
     } catch (e) {}
 
-    const proc = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: false });
-    proc.unref();
+    await new Promise((resolve, reject) => {
+      const proc = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: false });
+      proc.once('error', error => reject(new Error('Không khởi chạy được Chrome: ' + error.message)));
+      proc.once('spawn', () => { proc.unref(); resolve(); });
+    });
 
     let lastFailure = '';
     const startDeadline = Date.now() + 20000;

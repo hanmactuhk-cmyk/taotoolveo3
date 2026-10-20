@@ -725,7 +725,7 @@ export default function App() {
                     max="4"
                     step="1"
                     value={concurrent}
-                    onChange={e => setConcurrent(e.target.value)}
+                    readOnly
                     className="w-full bg-[#131924] border border-[#2B374B] rounded-lg px-2 py-1.5 text-xs text-slate-200"
                   />
                 </div>
