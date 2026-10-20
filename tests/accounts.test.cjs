@@ -12,6 +12,7 @@ test('account check uses a page client, never BrowserId for DOM commands', async
   const browser = { async connectFlowTab(selected) { assert.equal(selected, account); return client; } };
   let saved = 0; const result = await checkAccount(browser, { save() { saved++; } }, account);
   assert.equal(result.success, true); assert.equal(account.Credits, 40); assert.equal(saved, 1);
+  assert.equal(account.LoginStarted, true); assert.equal(account.LoginMode, false);
   assert.deepEqual(events, ['Page.enable', 'Network.enable', 'dispose']);
 });
 
@@ -40,6 +41,31 @@ test('already controlled Chrome is reused without requiring its profile to be cl
   await Promise.all([manager.enableControl({ Id: 'a' }), manager.enableControl({ Id: 'a' })]);
 });
 
+test('fourth and later profiles launch even if a profile file appears locked', async () => {
+  const original=BrowserManager.profileInUse;BrowserManager.profileInUse=()=>{throw new Error('File lock is not proof of a running Chrome');};
+  try {
+    const opened=[];
+    const manager=new BrowserManager({profileDir:account=>'fixture-'+account.Id,save(){}});
+    manager.isOpen=async()=>false;manager.recoverControl=async()=>false;
+    manager.open=async account=>{assert.equal(account.LoginMode,false);opened.push(account.Id);};
+    await Promise.all(Array.from({length:6},(_,i)=>manager.enableControl({Id:'account-'+(i+1),LoginMode:true})));
+    assert.deepEqual(opened,['account-1','account-2','account-3','account-4','account-5','account-6']);
+    assert(BrowserManager.loginArguments('fixture').includes('--remote-debugging-port=0'));
+  } finally {BrowserManager.profileInUse=original;}
+});
+
+test('login profile reconnects using its own DevTools port without closing Chrome',async()=>{
+ const fs=require('fs'),path=require('path');const root=fs.mkdtempSync(path.join(__dirname,'.fixture-'));
+ try {
+  fs.writeFileSync(path.join(root,'DevToolsActivePort'),'55444\n/devtools/browser/fourth\n');
+  const account={Id:'fourth',LoginMode:true,Port:0,BrowserId:''};
+  const manager=new BrowserManager({profileDir:()=>root,save(){}});manager.isOpen=async()=>false;
+  manager.readHttpJson=async port=>{assert.equal(port,55444);return {webSocketDebuggerUrl:'ws://127.0.0.1:55444/devtools/browser/fourth'};};
+  manager.open=async()=>{throw new Error('must reuse existing profile');};
+  await manager.enableControl(account);assert.equal(account.Port,55444);assert.equal(account.LoginMode,false);
+ } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test('two jobs connect to distinct page targets; never fall back to an existing job tab', async () => {
   const modulePath = require.resolve('../electron/cdp-client'); const existing = require.cache[modulePath];
   let created = 0; const pages = [{ type: 'page', id: 'existing', url: 'https://flow.google.com/project/old', webSocketDebuggerUrl: 'ws://127.0.0.1/existing' }];
@@ -47,6 +73,7 @@ test('two jobs connect to distinct page targets; never fall back to an existing 
     async connect(value) { this.address = value; }
     async call(method, params) {
       if (method === 'Target.createTarget') {
+        assert.equal(params.background, true);
         const id = 'new-' + ++created; pages.push({ type: 'page', id, url: params.url, webSocketDebuggerUrl: 'ws://127.0.0.1/' + id }); return { targetId: id };
       }
       if (this.address.includes('/browser/')) throw new Error('Page command on browser endpoint');

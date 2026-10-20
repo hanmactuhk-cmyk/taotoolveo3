@@ -392,4 +392,3 @@ class CdpClient {
 }
 
 module.exports = CdpClient;
-

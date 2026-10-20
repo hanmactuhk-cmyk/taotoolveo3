@@ -49,7 +49,9 @@ function validateFile(file, kind, require1080 = true) {
   throw new Error('Tệp tải về không phải PNG, JPEG hoặc WebP hợp lệ.');
 }
 
-async function downloadBrowserAsset({ page, browserAddress, asset, destination, onProgress = () => {}, timeoutMs = 10 * 60 * 1000, createClient }) {
+const videoResolution = account => String(account?.Plan).toLowerCase() === 'free' ? '720p' : '1080p';
+
+async function downloadBrowserAsset({ page, browserAddress, asset, destination, resolution = '1080p', onProgress = () => {}, timeoutMs = 10 * 60 * 1000, createClient }) {
   if (!['image', 'video'].includes(asset.kind)) throw new Error('Loại tệp không hợp lệ.');
   return serialized(browserAddress, async () => {
     const browser = createClient ? createClient() : new (require('./cdp-client'))();
@@ -66,7 +68,8 @@ async function downloadBrowserAsset({ page, browserAddress, asset, destination, 
       await browser.call('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath: folder, eventsEnabled: true, ...context });
       configured = true;
       const started = Date.now();
-      await page.bridge({ action: 'openAssetDownload', assetKey: asset.key, assetFingerprint: asset.fingerprint, kind: asset.kind });
+      await page.bridge({ action: 'openAssetDownload', assetKey: asset.key, assetFingerprint: asset.fingerprint, kind: asset.kind, resolution });
+      let checkedAt = 0;
       while (Date.now() - started < timeoutMs) {
         if (!guid) {
           const begin = browser.events.find(event => event.method === 'Browser.downloadWillBegin' && event.params.frameId === frameId);
@@ -74,6 +77,11 @@ async function downloadBrowserAsset({ page, browserAddress, asset, destination, 
             if (!/^[A-Za-z0-9-]{1,128}$/.test(begin.params.guid || '')) throw new Error('Chrome trả mã tải tệp không hợp lệ.');
             guid = begin.params.guid;
           }
+        }
+        if (!guid && Date.now() - checkedAt >= 1000) {
+          checkedAt = Date.now();
+          const flow = await page.bridge({ action: 'downloadStatus', assetKey: asset.key });
+          if (flow && flow.error) { const error = new Error(flow.error); error.code = 'FLOW_DOWNLOAD_ERROR'; throw error; }
         }
         if (guid) {
           const updates = browser.events.filter(event => event.method === 'Browser.downloadProgress' && event.params.guid === guid);
@@ -85,7 +93,8 @@ async function downloadBrowserAsset({ page, browserAddress, asset, destination, 
             if (status.state === 'completed') {
               complete = true;
               const downloaded = path.join(folder, guid);
-              const metadata = validateFile(downloaded, asset.kind);
+              const metadata = validateFile(downloaded, asset.kind, resolution !== '720p');
+              if (asset.kind === 'video' && resolution === '720p' && (!metadata.width || Math.min(metadata.width, metadata.height) < 720)) throw new Error('Tệp Flow trả về chưa đạt 720p.');
               let target = path.join(folder, path.basename(destination, path.extname(destination)) + metadata.extension);
               for (let index = 1; fs.existsSync(target); index++) target = path.join(folder, path.basename(destination, path.extname(destination)) + '_' + index + metadata.extension);
               fs.renameSync(downloaded, target);
@@ -104,4 +113,42 @@ async function downloadBrowserAsset({ page, browserAddress, asset, destination, 
   });
 }
 
-module.exports = { downloadBrowserAsset, validateFile, videoSize, serialized };
+function recoverableDownloadError(error) {
+  const text = String(error?.message || '');
+  if (/captcha|unusual|hoạt động bất thường|đăng nhập|sign.?in|login|tín dụng|credits?|quota|hạn mức|giới hạn|bị chặn|blocked|denied|forbidden|permission|khóa|locked|\b40[13]\b/i.test(text)) return false;
+  if (error?.code === 'FLOW_DOWNLOAD_ERROR') return true;
+  return /1080|upscale|độ phân giải|tải|download|timed? ?out|hết thời gian|kết nối tải/i.test(text);
+}
+
+async function downloadWithRefresh(options) {
+  const attempt = options.attemptDownload || downloadBrowserAsset;
+  try { return await attempt(options); }
+  catch (error) {
+    options.onAttemptError?.(error, 1);
+    if (options.asset.kind !== 'video' || !recoverableDownloadError(error)) throw error;
+    options.onRetry?.(error);
+    const page = options.page;
+    await page.call('Page.enable', {});
+    if (Array.isArray(page.events)) page.events = page.events.filter(event => event.method !== 'Page.loadEventFired');
+    await page.call('Page.reload', { ignoreCache: false });
+    if (page.waitForProtocolEvent) await page.waitForProtocolEvent('Page.loadEventFired', 30000);
+    const deadline = Date.now() + (options.refreshWaitMs ?? 30000);
+    let replacement;
+    do {
+      const listing = await page.bridge({ action: 'listResults' });
+      const sameKind = (listing.assets || []).filter(asset => asset.kind === options.asset.kind);
+      const exact = sameKind.filter(asset => asset.fingerprint && asset.fingerprint === options.asset.fingerprint);
+      const byLabel = sameKind.filter(asset => asset.label === options.asset.label);
+      if (exact.length === 1) replacement = exact[0];
+      else if (byLabel.length === 1) replacement = byLabel[0];
+      if (replacement) break;
+      if (Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 300));
+    } while (Date.now() < deadline);
+    if (!replacement) throw new Error('Sau làm mới chưa xác định được đúng video cần tải; giữ nguyên job để kiểm tra.');
+    await options.onRefreshed?.();
+    try { const result = await attempt({ ...options, asset: replacement }); return { ...result, assetFingerprint: replacement.fingerprint }; }
+    catch (second) { options.onAttemptError?.(second, 2); throw second; }
+  }
+}
+
+module.exports = { videoResolution, downloadBrowserAsset, downloadWithRefresh, recoverableDownloadError, validateFile, videoSize, serialized };

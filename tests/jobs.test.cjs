@@ -21,7 +21,7 @@ function fixture(count = 'x1') {
       calls.push({ action: 'connect', options });
       let prompt;
       return {
-        async enableDiagnostics() {}, dispose() {}, async uploadImage() {},
+        async enableDiagnostics() {}, dispose() {}, async uploadImage() {}, async call() {},
         async bridge(request) {
           calls.push({ ...request, clientId });
           switch (request.action) {
@@ -137,10 +137,14 @@ test('retry during monitoring waits; original sent prompt is not mutated', async
 });
 
 test('stop drains already submitted worker without sending next queued job', async () => {
-  const f = fixture(); const other = { ...f.job, Id: 'job-second', Results: [], Attempts: [] }; f.store.data.Queue.push(other);
+  const f = fixture();
+  for (let i=1;i<5;i++) f.store.data.Queue.push({...f.job,Id:'stop-'+i,Results:[],Attempts:[]});
+  const other=f.store.data.Queue[4];
   let release; f.hold(new Promise(resolve => { release = resolve; }));
+  const connect=f.browser.connectFlowTab.bind(f.browser);
+  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.bridge=async request=>{if(request.action==='jobStatus')while(!f.runner.stopped)await new Promise(r=>setTimeout(r,1));return bridge(request);};return client;};
   const task = f.runner.runQueue({ concurrent: 1, kind: 'image' });
-  while (!f.calls.some(call => call.action === 'jobStatus')) await new Promise(resolve => setTimeout(resolve, 1));
+  while (f.calls.filter(call => call.action === 'submit').length<4) await new Promise(resolve => setTimeout(resolve, 1));
   f.runner.stop(); assert.equal(f.runner.running, true);
   release(); await task;
   assert.equal(f.job.State, 'Hoàn tất'); assert.equal(other.State, 'Hàng đợi'); assert.equal(f.runner.running, false);
@@ -149,7 +153,7 @@ test('stop drains already submitted worker without sending next queued job', asy
 test('native result assets download before completion and HTTP cache cleanup', async () => {
   const f=fixture();f.account.BrowserId='ws://127.0.0.1/browser/fixture';
   const connect=f.browser.connectFlowTab.bind(f.browser);let saved=false;const cache=[];
-  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.call=async method=>{cache.push(method);assert(saved);};client.bridge=async request=>request.action==='jobStatus'?{assets:[{key:'tile-1',fingerprint:'media-1',kind:'image'}],progress:100}:bridge(request);return client;};
+  f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.call=async method=>{if(method==='Network.clearBrowserCache'){cache.push(method);assert(saved);}};client.bridge=async request=>request.action==='jobStatus'?{assets:[{key:'tile-1',fingerprint:'media-1',kind:'image'}],progress:100}:bridge(request);return client;};
   f.runner.downloadAsset=async(page,account,asset,target,onProgress)=>{onProgress({percent:42});assert.equal(f.job.State,'Đang chạy');fs.writeFileSync(target,'fixture');saved=true;return {path:target};};
   await f.runner.runQueue({kind:'image'});
   assert.equal(f.job.State,'Hoàn tất');assert.equal(f.job.DownloadProgress,100);assert.deepEqual(cache,['Network.clearBrowserCache']);
@@ -160,4 +164,53 @@ test('remounted tile cannot be counted twice toward x2 results',async()=>{
   const page={async bridge(request){if(request.action==='scrollResults')return {};polls++;return {assets:polls<3?[{key:'tile-'+polls,fingerprint:'same-media',kind:'image'}]:[{key:'other',fingerprint:'second-media',kind:'image'}]};}};
   f.runner.downloadAsset=async(page,account,asset,target)=>{downloads++;fs.writeFileSync(target,'fixture');return {path:target};};
   await f.runner.monitorJob(page,f.job);assert.equal(polls,3);assert.equal(downloads,2);assert.equal(f.job.Results.length,2);
+});
+
+test('unbounded backlog runs four at once and refills as soon as any job finishes',async()=>{
+ const f=fixture();f.store.data.Accounts=Array.from({length:8},(_,i)=>({...f.account,Id:'account-'+i}));
+ f.store.data.Queue=Array.from({length:25},(_,i)=>({...f.job,Id:'parallel-'+i,Results:[],Attempts:[]}));
+ const releases=new Map(),assigned=[];let active=0,peak=0;
+ f.runner.processJob=async(job,account)=>{job.AccountId=account.Id;job.State='Đang chạy';assigned.push(account.Id);active++;peak=Math.max(peak,active);await new Promise(resolve=>releases.set(job.Id,resolve));active--;job.State='Hoàn tất';};
+ const waitFor=async count=>{const until=Date.now()+1000;while(assigned.length<count&&Date.now()<until)await new Promise(r=>setTimeout(r,1));assert.equal(assigned.length,count);};
+ const task=f.runner.runQueue({concurrent:100});
+ try {
+  await waitFor(4);assert.equal(peak,4);
+  releases.get('parallel-2')();await waitFor(5);
+  assert.equal(f.store.data.Queue[0].State,'Đang chạy');assert.equal(assigned[4],'account-4');
+  for(let next=5;next<25;next++){releases.get('parallel-'+(next-1))();await waitFor(next+1);}
+  assert.equal(new Set(assigned).size,8);assert.equal(peak,4);
+ } finally {f.runner.stop();for(const release of releases.values())release();await task;}
+ assert(f.store.data.Queue.every(job=>job.State==='Hoàn tất'));
+});
+
+test('two automatic parallel jobs use different enabled accounts',async()=>{
+ const f=fixture();f.store.data.Accounts.push({...f.account,Id:'account-b',Name:'B'});
+ const second={...f.job,Id:'job-second',Results:[],Attempts:[]};f.store.data.Queue.push(second);
+ let release;f.hold(new Promise(resolve=>release=resolve));const task=f.runner.runQueue({concurrent:2});
+ while(f.calls.filter(c=>c.action==='connect').length<2)await new Promise(r=>setTimeout(r,1));
+ assert.equal(f.job.AccountId,'account-a');assert.equal(second.AccountId,'account-b');release();await task;
+ assert.equal(f.job.State,'Hoàn tất');assert.equal(second.State,'Hoàn tất');
+});
+
+test('one account gets two separate job tabs while prompt entry is serialized',async()=>{
+ const f=fixture(),second={...f.job,Id:'job-second',Results:[],Attempts:[]};f.store.data.Queue.push(second);
+ const connect=f.browser.connectFlowTab.bind(f.browser);let release,fills=0;const gate=new Promise(r=>release=r);
+ f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.bridge=async request=>{if(request.action==='fill'){fills++;if(fills===1)await gate;}return bridge(request);};return client;};
+ const task=f.runner.runQueue({concurrent:2});
+ while(f.calls.filter(c=>c.action==='connect').length<2||fills===0)await new Promise(r=>setTimeout(r,1));
+ assert.equal(fills,1);assert(f.calls.filter(c=>c.action==='connect').every(c=>c.options.newTab));release();await task;
+ assert.equal(fills,2);assert.notEqual(f.job.Url,second.Url);assert.equal(f.job.AccountId,second.AccountId);
+});
+
+test('account picker rotates ties and respects explicitly selected account',()=>{
+ const f=fixture();f.store.data.Accounts.push({...f.account,Id:'b'},{...f.account,Id:'c'});
+ assert.deepEqual([f.runner.pickAccount(f.job).Id,f.runner.pickAccount(f.job).Id,f.runner.pickAccount(f.job).Id],['account-a','b','c']);
+ assert.equal(f.runner.pickAccount({...f.job,AccountId:'b'}).Id,'b');
+});
+
+test('original Flow error and stage are kept in separate per-job and error logs',async()=>{
+ const f=fixture(),message='Không thể tạo video.\nMáy chủ trả về lỗi thử nghiệm.';
+ const connect=f.browser.connectFlowTab.bind(f.browser);f.browser.connectFlowTab=async(...args)=>{const client=await connect(...args),bridge=client.bridge.bind(client);client.bridge=async request=>request.action==='jobStatus'?{error:message}:bridge(request);return client;};
+ await f.runner.runQueue();assert.equal(f.job.Note,message);assert.equal(f.job.LastError.message,message);assert.equal(f.job.LastError.stage,'Theo dõi Flow');
+ assert(fs.readFileSync(f.job.LogFile,'utf8').includes(message));assert(fs.readFileSync(path.join(f.store.data.OutputFolder,'logs/errors.log'),'utf8').includes(message));
 });

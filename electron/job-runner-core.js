@@ -2,8 +2,9 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { downloadMedia } = require('./media-download');
-const { downloadBrowserAsset } = require('./browser-download');
+const { downloadWithRefresh, serialized, videoResolution } = require('./browser-download');
 const { clearHttpCache } = require('./browser-cache');
+const { appendJobLog } = require('./job-log');
 const { activeStates, resolveModel, configuredFields, jobImages, requiredResults, verifyAccount, resetJob } = require('./job-utils');
 
 class JobRunner {
@@ -16,14 +17,31 @@ class JobRunner {
     this.sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.lastOptions = {};
     this.cachePending = new Set();
+    this.accountTurns = new Map(); this.assignmentSequence = 0;
   }
   log(msg) { this.onEvent('log', `${new Date().toLocaleTimeString()} ${msg}`); }
   status() { this.onEvent('runner-status', { running: this.running, paused: this.paused, stopping: this.stopped && this.running, active: this.activeWorkers }); }
   updateQueue() { this.onEvent('queue-updated', this.store.data.Queue); this.status(); }
   accountBusy(id) { return this.store.data.Queue.some(job => job.AccountId === id && activeStates.has(job.State)); }
+  record(job, stage, message, level = 'info') {
+    job.Stage = stage;
+    if (level === 'error') job.LastError = { stage, message, time: new Date().toISOString() };
+    try { appendJobLog(this.store, job, stage, message, level); }
+    catch (error) { this.log('[Log] Không ghi được log riêng: ' + error.message); }
+    this.log(`[Job ${job.Id}][${stage}] ${message}`);
+  }
+  pickAccount(job) {
+    const eligible = this.store.data.Accounts.filter(account => account.LoginStarted && account.Enabled &&
+      (job.Kind === 'image' ? account.Images : account.Videos) && (!job.AccountId || job.AccountId === 'auto' || job.AccountId === account.Id));
+    const load = id => this.store.data.Queue.filter(item => item.AccountId === id && this.workers.has(item.Id)).length;
+    eligible.sort((a,b) => load(a.Id) - load(b.Id) || Number(this.isCoolingDown(a.Id)) - Number(this.isCoolingDown(b.Id)) || (this.accountTurns.get(a.Id) || 0) - (this.accountTurns.get(b.Id) || 0));
+    const account = eligible[0];
+    if (account) this.accountTurns.set(account.Id, ++this.assignmentSequence);
+    return account;
+  }
   runQueue(options = {}) {
     if (this.running) return this.runPromise;
-    const concurrent = Math.min(4, Math.max(1, Number.parseInt(options.concurrent, 10) || 1));
+    const concurrent = 4;
     this.lastOptions = { ...options, concurrent };
     this.running = true; this.paused = false; this.stopped = false; this.status();
     this.runPromise = this.drain(this.lastOptions); return this.runPromise;
@@ -41,12 +59,10 @@ class JobRunner {
           await Promise.race([...this.workers.values(), this.sleep(100)]); continue;
         }
         if (this.workers.size >= options.concurrent) { await Promise.race([...this.workers.values(), this.sleep(100)]); continue; }
-        const eligible = this.store.data.Accounts.filter(account => account.LoginStarted && account.Enabled &&
-          (job.Kind === 'image' ? account.Images : account.Videos) && (!job.AccountId || job.AccountId === 'auto' || job.AccountId === account.Id));
-        const account = eligible.find(item => !this.isCoolingDown(item.Id)) || eligible[0];
-        if (!account) { job.State = 'Lỗi'; job.Note = 'Không có tài khoản đủ quyền cho tác vụ này.'; this.store.save(); this.updateQueue(); continue; }
+        const account = this.pickAccount(job);
+        if (!account) { job.State = 'Lỗi'; job.Note = 'Không có tài khoản đủ quyền cho tác vụ này.'; this.record(job, 'Tài khoản', job.Note, 'error'); this.store.save(); this.updateQueue(); continue; }
         const task = this.processJob(job, account).catch(error => {
-          job.State = job.Submitted ? 'Cần kiểm tra' : 'Lỗi'; job.Note = error.message; this.log(`[Job ${job.Id}] ${error.message}`);
+          job.State = job.Submitted ? 'Cần kiểm tra' : 'Lỗi'; job.Note = error.message; this.record(job, job.Stage || 'Điều phối', error.message, 'error');
         }).finally(() => {
           this.workers.delete(job.Id);
           if (this.pendingRetries.delete(job.Id)) { resetJob(job); try { this.store.save(); } catch (error) { this.log(error.message); } }
@@ -69,6 +85,7 @@ class JobRunner {
     this.activeWorkers++;
     Object.assign(job, { AutoDraft: false, SentPrompt: job.Prompt, State: 'Đang chạy', AccountId: account.Id, Note: 'Đang kết nối đúng tab Chrome...' });
     if (!job.ExecutionId) job.ExecutionId = crypto.randomUUID();
+    this.record(job, 'Kết nối', `Phân công ${account.Name || account.Id}; mở tab/dự án riêng cho job.`);
     let cdp;
     try {
       this.store.save(); this.updateQueue();
@@ -77,19 +94,26 @@ class JobRunner {
       for (const image of images) if (!fs.existsSync(image.path) || !fs.statSync(image.path).isFile()) throw new Error('Không tìm thấy ảnh đã chọn: ' + path.basename(image.path));
       if (this.isCoolingDown(account.Id)) await this.sleep(this.cooldowns.get(account.Id) - Date.now());
       if (this.stopped) throw new Error('Đã dừng trước khi gửi.');
-      cdp = await this.connectJobTab(account, job.Url); cdp.trace = message => this.log(`[Job ${job.Id}][CDP] ${message}`);
+      cdp = await this.connectJobTab(account, job.Url); cdp.trace = message => this.record(job, job.Stage || 'CDP', message);
+      await serialized('job-ui:' + account.Id, async () => {
+      if (this.stopped) throw new Error('Đã dừng trước khi chuẩn bị lệnh.');
+      await cdp.call('Page.bringToFront', {});
       await cdp.enableDiagnostics();
+      this.record(job, 'Đọc tài khoản', 'Đang đọc tài khoản từ tab của job.');
       const data = await cdp.bridge({ action: 'account' });
       if (!data || !data.email) throw new Error('Flow chưa trả email tài khoản.');
       Object.assign(account, { Email: data.email, Plan: data.plan, Credits: data.credits, Evidence: data.evidence || '', CheckedUtc: new Date().toISOString(), Status: 'Đã đọc từ Flow' });
       const verified = { ...account }; this.store.save(); this.onEvent('account-updated', account);
+      this.record(job, 'Cấu hình', 'Đang đọc model và cấu hình Flow.');
       const catalog = await cdp.bridge({ action: 'catalog', kind: job.Kind });
       job.Url = (await cdp.bridge({ action: 'status' })).url; this.store.save();
       job.Model = resolveModel(catalog.models || [], job.Model);
       const settings = await cdp.bridge({ action: 'configure', kind: job.Kind, model: job.Model });
       const config = await cdp.bridge({ action: 'configure', kind: job.Kind, fields: configuredFields(settings, job) });
       await cdp.bridge({ action: 'verifyConfig', ratio: job.Ratio, count: job.Count }); verifyAccount(verified, config.cost);
+      this.record(job, 'Nhập prompt', `Nhập toàn bộ ${job.SentPrompt.length} ký tự trong một lần.`);
       await cdp.bridge({ action: 'fill', prompt: job.SentPrompt });
+      this.record(job, 'Ảnh tham chiếu', 'Kiểm tra ảnh đầu/cuối và ảnh tham chiếu.');
       for (const image of images) { this.log(`[Job ${job.Id}] Tải ${image.slot}: ${path.basename(image.path)}`); await cdp.uploadImage(image.path, image.slot); }
       for (const slot of [...new Set(images.map(image => image.slot))]) {
         const attached = await cdp.bridge({ action: 'attachmentCount', slot });
@@ -104,12 +128,15 @@ class JobRunner {
         Folder: path.join(this.store.data.OutputFolder, job.Kind, job.Id, job.ExecutionId), Url: ready.url, State: 'Đang gửi', Submitted: true });
       fs.mkdirSync(job.Folder, { recursive: true });
       this.store.save(); this.updateQueue();
+      this.record(job, 'Gửi lệnh', 'Gửi một lần trên đúng tab của job.');
       await cdp.bridge({ action: 'submit', jobId: job.ExecutionId, prompt: job.SentPrompt });
+      });
       job.State = 'Đang chạy'; job.Note = 'Flow đã nhận lệnh; đang theo dõi kết quả.';
+      this.record(job, 'Theo dõi Flow', job.Note);
       this.store.save(); this.updateQueue(); await this.monitorJob(cdp, job, required);
       this.cachePending.add(account.Id);
     } catch (error) {
-      job.State = job.Submitted ? 'Cần kiểm tra' : 'Lỗi'; job.Note = error.message; this.log(`[Job ${job.Id}] ${error.message}`);
+      job.State = job.Submitted ? 'Cần kiểm tra' : 'Lỗi'; job.Note = error.message; this.record(job, job.Stage || 'Flow', error.message, 'error');
       if (/hoạt động bất thường|unusual activity/i.test(error.message)) {
         this.log(`[Job ${job.Id}] Phát hiện reCAPTCHA / hoạt động bất thường. Đang tự động dọn _grecaptcha và tải lại tab...`);
         try {
@@ -150,12 +177,14 @@ class JobRunner {
       for (const asset of status.assets || []) if (!downloaded.has('asset:' + (asset.fingerprint || asset.key))) {
         const account = this.store.data.Accounts.find(item => item.Id === job.AccountId);
         if (!account || !account.BrowserId) throw new Error('Mất phiên Chrome dùng tải kết quả.');
-        const target = path.join(job.Folder, `result_${downloaded.size + 1}${job.Kind === 'video' ? '_1080p.mp4' : '.png'}`);
-        job.Note = job.Kind === 'video' ? 'Đang chuẩn bị và tải video 1080p từ Flow...' : 'Đang tải ảnh gốc từ Flow...';
+        const resolution = videoResolution(account);
+        const target = path.join(job.Folder, `result_${downloaded.size + 1}${job.Kind === 'video' ? '_' + resolution + '.mp4' : '.png'}`);
+        job.Note = job.Kind === 'video' ? `Đang chuẩn bị và tải video ${resolution} từ Flow...` : 'Đang tải ảnh gốc từ Flow...';
+        this.record(job, 'Tải tệp', job.Note);
         const saved = await this.downloadAsset(cdp, account, asset, target, progress => {
           job.DownloadProgress = progress.percent; this.updateQueue();
         });
-        downloaded.set('asset:' + (asset.fingerprint || asset.key), saved.path); job.Results = [...downloaded.values()];
+        downloaded.set('asset:' + (saved.assetFingerprint || asset.fingerprint || asset.key), saved.path); job.Results = [...downloaded.values()];
         job.ResultMetadata = [...(job.ResultMetadata || []), saved]; job.DownloadProgress = 100;
         this.store.save(); this.updateQueue();
       }
@@ -166,6 +195,7 @@ class JobRunner {
       }
       if (downloaded.size >= required) {
         job.State = 'Hoàn tất'; job.Progress = 100; job.Note = `Đã tải ${downloaded.size} tệp kết quả thật.`;
+        this.record(job, 'Hoàn tất', job.Note);
         this.store.save(); this.updateQueue(); return;
       }
       if (Array.isArray(status.assets) && status.assets.length) await cdp.bridge({ action: 'scrollResults' });
@@ -174,7 +204,14 @@ class JobRunner {
     throw new Error('Quá thời gian theo dõi; kiểm tra Flow trước khi gửi lại.');
   }
   downloadFile(url, destination, kind = 'video') { return downloadMedia(url, destination, kind); }
-  downloadAsset(page, account, asset, destination, onProgress) { return downloadBrowserAsset({ page, browserAddress: account.BrowserId, asset, destination, onProgress }); }
+  downloadAsset(page, account, asset, destination, onProgress) {
+    const job = this.store.data.Queue.find(item => item.AccountId === account.Id && item.Folder === path.dirname(destination));
+    return downloadWithRefresh({ page, browserAddress: account.BrowserId, asset, destination, onProgress, resolution: videoResolution(account),
+      onAttemptError: (error, attempt) => { if (job) this.record(job, 'Tải tệp', `Lần ${attempt}: ${error.message}`, 'error'); },
+      onRetry: () => { if (job) { job.Note = `Tải ${videoResolution(account)} lỗi; làm mới đúng tab một lần rồi thử tải lại.`; this.record(job, 'Tải tệp', job.Note); this.updateQueue(); } },
+      onRefreshed: async () => { if (job) { job.BaselineCards = []; await page.bridge({ action: 'restoreObservation', prompt: job.SentPrompt }); } }
+    });
+  }
   retryJob(id) {
     const job = this.store.data.Queue.find(item => item.Id === id);
     if (!job) throw new Error('Không tìm thấy job.');

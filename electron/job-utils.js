@@ -65,7 +65,7 @@ function resetJob(job) {
     Url: job.Url, Folder: job.Folder, Results: [...(job.Results || [])]
   }];
   Object.assign(job, { ExecutionId: crypto.randomUUID(), Submitted: false, SentPrompt: null,
-    State: 'Hàng đợi', Note: 'Tạo lại trên cùng job', Progress: null, Results: [],
+    State: 'Hàng đợi', Note: 'Tạo lại trên cùng job', Stage: 'Hàng đợi', LastError: null, Progress: null, Results: [],
     Baseline: [], BaselineCards: [], BaselineSignatures: [], DownloadProgress: null, ResultMetadata: [], Url: '', Folder: '', AutoDraft: false });
   return job;
 }

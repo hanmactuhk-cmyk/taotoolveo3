@@ -191,15 +191,25 @@
       return {ok:true,data:{cards,signatures,urls:[...document.querySelectorAll('video,video source,img')].map(e=>e.currentSrc||e.src).filter(Boolean)}};
     }
     if(request.action==='jobStatus'){
+      const notices=list('[role="alert"],mat-snack-bar-container').map(e=>(e.innerText||e.textContent||'').trim()).filter(t=>/không thành công|không thể|thất bại|lỗi|failed|error|went wrong|unable|couldn.t|unusual|hoạt động bất thường|quá nhanh|too many|too fast|rate limit/i.test(t));
+      if(notices.length)return {ok:true,data:{assets:[],urls:[],error:notices.join('\n')}};
       const target=norm(request.prompt),sent=window.__flowdeskSubmission;
       const candidates=resultCards().filter(e=>!(request.baselineCards||[]).includes(tileId(e))&&!(request.baselineSignatures||[]).includes(cardSignature(e)));
       const cards=candidates.filter(e=>norm(e.getAttribute('aria-label')||e.querySelector('[data-prompt]')?.getAttribute('data-prompt')||e.querySelector('.prompt-text,.asset-prompt')?.textContent)===target||(sent&&norm(sent.prompt)===target));
       const assets=[],progress=[];
-      for(const card of cards){const error=card.querySelector('flow-error-tile .error-message,.error-message,[role="alert"]');if(error)return {ok:true,data:{assets:[],urls:[],error:norm(error.innerText)}};const asset=readyAsset(card);if(asset&&asset.kind===request.kind){assets.push(asset);progress.push(100);}else{const n=cardProgress(card);if(n!==null)progress.push(n);}}
+      for(const card of cards){const error=card.querySelector('flow-error-tile .error-message,.error-message,[role="alert"]');if(error)return {ok:true,data:{assets:[],urls:[],error:(error.innerText||error.textContent||'').trim()}};const asset=readyAsset(card);if(asset&&asset.kind===request.kind){assets.push(asset);progress.push(100);}else{const n=cardProgress(card);if(n!==null)progress.push(n);}}
       return {ok:true,data:{assets,urls:[],progress:progress.length?Math.min(...progress):null,message:assets.length?'Flow đã tạo kết quả; chuẩn bị tải tệp.':cards.length?'Đang tạo trên Flow.':'Chờ thẻ mới của lần gửi; chưa ghép kết quả cũ.'}};
     }
     if(request.action==='listResults'){
       return {ok:true,data:{assets:resultCards().map(readyAsset).filter(Boolean),url:location.href}};
+    }
+    if(request.action==='restoreObservation'){
+      window.__flowdeskSubmission={prompt:request.prompt,tiles:[]};return {ok:true,data:{restored:true}};
+    }
+    if(request.action==='downloadStatus'){
+      const card=resultCards().find(e=>tileId(e)===request.assetKey);
+      const errors=[...(card?[...card.querySelectorAll('flow-error-tile .error-message')]:[]),...list('[role="alert"],mat-snack-bar-container')].map(e=>(e.innerText||e.textContent||'').trim()).filter(t=>/không thành công|không thể|thất bại|lỗi|failed|error|went wrong|unable|couldn.t|unusual|hoạt động bất thường/i.test(t));
+      return {ok:true,data:{error:errors.join('\n')}};
     }
     if(request.action==='scrollResults'){
       const card=resultCards()[0];let viewport=card?.parentElement;
@@ -216,10 +226,11 @@
       const entry=await wait(()=>list('[role="menuitem"]').find(e=>/^(Tải xuống|Download)$/i.test(text(e))),'Flow chưa mở menu tải xuống.');
       const submenu=entry.getAttribute('aria-haspopup')==='menu';tap(entry);
       if(request.kind==='video'){
-        const option=await wait(()=>list('[role="menuitem"]').find(e=>/^1080p$/i.test(text(e))),'Flow không có lựa chọn tải 1080p cho video này.');
-        if(disabled(option))throw Error('Flow khóa bản 1080p cho video/tài khoản này.');
-        if(/\d+\s*(tín dụng|credits)/i.test(option.innerText))throw Error('Flow yêu cầu tín dụng để tải 1080p; cần bạn xác nhận trong trình duyệt.');
-        tap(option);return {ok:true,data:{requested:true,resolution:'1080p'}};
+        const resolution=request.resolution==='720p'?'720p':'1080p';
+        const option=await wait(()=>list('[role="menuitem"]').find(e=>resolution==='720p'?/^720p(?:\s|$)/i.test(text(e)):/^1080p$/i.test(text(e))),'Flow không có lựa chọn tải '+resolution+' cho video này.');
+        if(disabled(option))throw Error('Flow khóa bản '+resolution+' cho video/tài khoản này.');
+        if(/\d+\s*(tín dụng|credits)/i.test(option.innerText))throw Error('Flow yêu cầu tín dụng để tải '+resolution+'; cần bạn xác nhận trong trình duyệt.');
+        tap(option);return {ok:true,data:{requested:true,resolution}};
       }
       if(submenu){const option=await wait(()=>list('[role="menuitem"]').find(e=>/^(Kích thước gốc|Kích thước gốc|Original(?: size)?|1K)$/i.test(text(e))),'Flow chưa cung cấp lựa chọn tải ảnh gốc.');tap(option);}
       return {ok:true,data:{requested:true,resolution:'original'}};
