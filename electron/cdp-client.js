@@ -74,7 +74,6 @@ class CdpClient {
   }
 
   async call(method, params = {}, timeoutMs = 35000) {
-    if (this.background && method === 'Page.bringToFront') return {};
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket chưa mở hoặc đã đóng.');
     }

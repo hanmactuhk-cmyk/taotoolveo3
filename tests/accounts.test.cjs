@@ -72,8 +72,6 @@ test('two jobs connect to distinct page targets; never fall back to an existing 
   class FakeCdp {
     async connect(value) { this.address = value; }
     async call(method, params) {
-      if (method === 'Browser.getWindowForTarget') { assert(params.targetId.startsWith('new-')); return {windowId:4}; }
-      if (method === 'Browser.setWindowBounds') { assert.equal(params.windowId,4); assert.equal(params.bounds.windowState,'minimized'); return {}; }
       if (method === 'Target.createTarget') {
         assert.equal(params.background, true);
         const id = 'new-' + ++created; pages.push({ type: 'page', id, url: params.url, webSocketDebuggerUrl: 'ws://127.0.0.1/' + id }); return { targetId: id };
@@ -90,8 +88,7 @@ test('two jobs connect to distinct page targets; never fall back to an existing 
     const manager = new BrowserManager({}); manager.enableControl = async () => {};
     manager.readHttpJson = async () => pages;
     const account = { Id: 'a', BrowserId: 'ws://127.0.0.1/browser/root', Port: 12345 };
-    const [one, two] = await Promise.all([manager.connectFlowTab(account, { newTab: true, background:true }), manager.connectFlowTab(account, { newTab: true, background:true })]);
-    assert.equal(one.background,true);assert.equal(two.background,true);
+    const [one, two] = await Promise.all([manager.connectFlowTab(account, { newTab: true }), manager.connectFlowTab(account, { newTab: true })]);
     assert.notEqual(one.address, two.address); assert.notEqual(one.address, pages[0].webSocketDebuggerUrl);
     assert.equal(created, 2);
   } finally { if (existing) require.cache[modulePath] = existing; else delete require.cache[modulePath]; }
