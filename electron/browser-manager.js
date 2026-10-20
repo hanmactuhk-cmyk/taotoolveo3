@@ -99,21 +99,21 @@ class BrowserManager {
     throw new Error('Không tìm thấy Chrome. Hãy cài Chrome trước khi mở hồ sơ.');
   }
 
-  async enableControl(account) {
+  async enableControl(account, options = {}) {
     const previous = this.controlLocks.get(account.Id) || Promise.resolve();
-    const operation = previous.catch(() => {}).then(() => this.ensureControl(account));
+    const operation = previous.catch(() => {}).then(() => this.ensureControl(account, options));
     this.controlLocks.set(account.Id, operation);
     try { await operation; }
     finally { if (this.controlLocks.get(account.Id) === operation) this.controlLocks.delete(account.Id); }
   }
 
-  async ensureControl(account) {
+  async ensureControl(account, options = {}) {
     if (await this.isOpen(account)) return;
     const profile = this.store.profileDir(account);
     if (await this.recoverControl(account, profile)) return;
     account.LoginMode = false;
     this.store.save();
-    await this.open(account);
+    await this.open(account, options);
   }
 
   async recoverControl(account, profile) {
@@ -160,7 +160,7 @@ class BrowserManager {
     }
   }
 
-  async open(account) {
+  async open(account, { background = false } = {}) {
     if (account.LoginMode) {
       throw new Error('Đăng nhập xong hãy đóng cửa sổ hồ sơ rồi bấm Kết nối và đọc tài khoản.');
     }
@@ -215,6 +215,7 @@ class BrowserManager {
       if (fs.existsSync(activePortFile)) fs.unlinkSync(activePortFile);
     } catch (e) {}
 
+    if (background) args.splice(args.length - 1, 0, '--start-minimized');
     await new Promise((resolve, reject) => {
       const proc = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: false });
       proc.once('error', error => reject(new Error('Không khởi chạy được Chrome: ' + error.message)));
@@ -282,9 +283,9 @@ class BrowserManager {
     throw new Error('Tab của job chưa tải xong Flow sau 25 giây; lệnh chưa được gửi.');
   }
 
-  async connectFlowTab(account, { projectUrl = '', newTab = false, existingProject = false } = {}) {
+  async connectFlowTab(account, { projectUrl = '', newTab = false, existingProject = false, background = false } = {}) {
     if (projectUrl && !isFlowUrl(projectUrl)) throw new Error('URL dự án Flow không hợp lệ.');
-    await this.enableControl(account);
+    await this.enableControl(account, { background });
     const CdpClient = require('./cdp-client');
     let pages = await this.readHttpJson(account.Port, '/json/list');
     if (existingProject) {
@@ -313,6 +314,15 @@ class BrowserManager {
     const client = new CdpClient();
     try {
       await client.connect(target.webSocketDebuggerUrl);
+      if (background) {
+        const control = new CdpClient();
+        try {
+          await control.connect(account.BrowserId);
+          const { windowId } = await control.call('Browser.getWindowForTarget', { targetId: target.id });
+          await control.call('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+          client.background = true;
+        } finally { control.dispose(); }
+      }
       await this.waitForFlowPage(client);
       return client;
     } catch (error) { client.dispose(); throw error; }

@@ -164,7 +164,7 @@ class JobRunner {
       this.setCooldown(account.Id, seconds); this.activeWorkers--; this.store.save(); this.updateQueue();
     }
   }
-  connectJobTab(account, projectUrl) { return this.browser.connectFlowTab(account, { projectUrl: projectUrl || '', newTab: true }); }
+  connectJobTab(account, projectUrl) { return this.browser.connectFlowTab(account, { projectUrl: projectUrl || '', newTab: true, background: true }); }
 
   async monitorJob(cdp, job, required = requiredResults(job)) {
     const deadline = Date.now() + this.monitorTimeout; const downloaded = new Map();

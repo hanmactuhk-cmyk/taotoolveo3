@@ -140,6 +140,7 @@ export default function App() {
 
   // Data Store State
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [checkingAll, setCheckingAll] = useState(false);
   const [selectedAccId, setSelectedAccId] = useState<string>('');
   const [queue, setQueue] = useState<StudioTask[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
@@ -1143,6 +1144,13 @@ export default function App() {
                     className="px-3.5 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 text-xs font-semibold text-emerald-300 rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-500/40"
                   >
                     <RefreshCw className="w-3.5 h-3.5" /> Kết nối và đọc tài khoản
+                  </button>
+                  <button disabled={checkingAll || !accounts.length} onClick={async () => {
+                    setCheckingAll(true);
+                    try { for (const account of [...accounts]) await handleCheckAccount(account.Id); }
+                    finally { setCheckingAll(false); }
+                  }} className="px-3.5 py-2 bg-emerald-700 rounded-lg text-xs font-semibold disabled:opacity-50">
+                    {checkingAll ? 'Đang kiểm tra tất cả...' : 'Kiểm tra tất cả'}
                   </button>
                 </div>
               </div>
