@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { downloadMedia } = require('./media-download');
-const { downloadWithRefresh, serialized } = require('./browser-download');
+const { downloadWithRefresh, serialized, videoResolution } = require('./browser-download');
 const { clearHttpCache } = require('./browser-cache');
 const { appendJobLog } = require('./job-log');
 const { activeStates, resolveModel, configuredFields, jobImages, requiredResults, verifyAccount, resetJob } = require('./job-utils');
@@ -177,8 +177,9 @@ class JobRunner {
       for (const asset of status.assets || []) if (!downloaded.has('asset:' + (asset.fingerprint || asset.key))) {
         const account = this.store.data.Accounts.find(item => item.Id === job.AccountId);
         if (!account || !account.BrowserId) throw new Error('Mất phiên Chrome dùng tải kết quả.');
-        const target = path.join(job.Folder, `result_${downloaded.size + 1}${job.Kind === 'video' ? '_1080p.mp4' : '.png'}`);
-        job.Note = job.Kind === 'video' ? 'Đang chuẩn bị và tải video 1080p từ Flow...' : 'Đang tải ảnh gốc từ Flow...';
+        const resolution = videoResolution(account);
+        const target = path.join(job.Folder, `result_${downloaded.size + 1}${job.Kind === 'video' ? '_' + resolution + '.mp4' : '.png'}`);
+        job.Note = job.Kind === 'video' ? `Đang chuẩn bị và tải video ${resolution} từ Flow...` : 'Đang tải ảnh gốc từ Flow...';
         this.record(job, 'Tải tệp', job.Note);
         const saved = await this.downloadAsset(cdp, account, asset, target, progress => {
           job.DownloadProgress = progress.percent; this.updateQueue();
@@ -205,9 +206,9 @@ class JobRunner {
   downloadFile(url, destination, kind = 'video') { return downloadMedia(url, destination, kind); }
   downloadAsset(page, account, asset, destination, onProgress) {
     const job = this.store.data.Queue.find(item => item.AccountId === account.Id && item.Folder === path.dirname(destination));
-    return downloadWithRefresh({ page, browserAddress: account.BrowserId, asset, destination, onProgress,
+    return downloadWithRefresh({ page, browserAddress: account.BrowserId, asset, destination, onProgress, resolution: videoResolution(account),
       onAttemptError: (error, attempt) => { if (job) this.record(job, 'Tải tệp', `Lần ${attempt}: ${error.message}`, 'error'); },
-      onRetry: () => { if (job) { job.Note = 'Tải 1080p lỗi; làm mới đúng tab một lần rồi thử tải lại.'; this.record(job, 'Tải tệp', job.Note); this.updateQueue(); } },
+      onRetry: () => { if (job) { job.Note = `Tải ${videoResolution(account)} lỗi; làm mới đúng tab một lần rồi thử tải lại.`; this.record(job, 'Tải tệp', job.Note); this.updateQueue(); } },
       onRefreshed: async () => { if (job) { job.BaselineCards = []; await page.bridge({ action: 'restoreObservation', prompt: job.SentPrompt }); } }
     });
   }

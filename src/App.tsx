@@ -518,11 +518,11 @@ export default function App() {
       {flowResults && <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-8">
         <div className="bg-[#1C2534] border border-[#3A4A63] rounded-xl p-5 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
           <div className="flex justify-between items-center mb-3"><h2 className="font-bold">Kết quả trong dự án Flow đang mở</h2><button disabled={!!flowDownload} onClick={() => setFlowResults(null)} className="px-3 py-1 rounded border border-slate-500">Đóng</button></div>
-          <p className="text-xs text-slate-400 mb-3">Video tải bản 1080p; ảnh tải bản gốc. Không tạo lại ảnh/video.</p>
+          <p className="text-xs text-slate-400 mb-3">Video: gói Free tải 720p, gói khác tải 1080p khi Flow cho phép; ảnh tải bản gốc.</p>
           {!flowResults.assets.length && <p className="text-sm text-slate-300">Chưa có kết quả đã tải xong trên trang. Mở dự án có kết quả rồi đọc lại.</p>}
           {flowResults.assets.map(asset => <div key={asset.key} className="flex items-center justify-between gap-3 border-t border-slate-700 py-3">
             <span className="text-xs break-words">{asset.kind === 'video' ? 'Video' : 'Ảnh'} — {asset.label || 'Kết quả'}</span>
-            <button disabled={!!flowDownload} onClick={() => handleDownloadFlowResult(asset.key)} className="shrink-0 px-3 py-2 rounded bg-cyan-700 text-xs disabled:opacity-50">{flowDownload === asset.key ? (flowDownloadProgress === null ? 'Chuẩn bị...' : `Đang tải ${flowDownloadProgress}%`) : asset.kind === 'video' ? 'Tải 1080p' : 'Tải ảnh'}</button>
+            <button disabled={!!flowDownload} onClick={() => handleDownloadFlowResult(asset.key)} className="shrink-0 px-3 py-2 rounded bg-cyan-700 text-xs disabled:opacity-50">{flowDownload === asset.key ? (flowDownloadProgress === null ? 'Chuẩn bị...' : `Đang tải ${flowDownloadProgress}%`) : asset.kind === 'video' ? (accounts.find(a => a.Id === flowResults.accountId)?.Plan === 'Free' ? 'Tải 720p' : 'Tải 1080p') : 'Tải ảnh'}</button>
           </div>)}
           {flowDownloadMessage && <p className="text-xs mt-3 text-cyan-200 break-all select-text">{flowDownloadMessage}</p>}
         </div>

@@ -226,10 +226,11 @@
       const entry=await wait(()=>list('[role="menuitem"]').find(e=>/^(Tải xuống|Download)$/i.test(text(e))),'Flow chưa mở menu tải xuống.');
       const submenu=entry.getAttribute('aria-haspopup')==='menu';tap(entry);
       if(request.kind==='video'){
-        const option=await wait(()=>list('[role="menuitem"]').find(e=>/^1080p$/i.test(text(e))),'Flow không có lựa chọn tải 1080p cho video này.');
-        if(disabled(option))throw Error('Flow khóa bản 1080p cho video/tài khoản này.');
-        if(/\d+\s*(tín dụng|credits)/i.test(option.innerText))throw Error('Flow yêu cầu tín dụng để tải 1080p; cần bạn xác nhận trong trình duyệt.');
-        tap(option);return {ok:true,data:{requested:true,resolution:'1080p'}};
+        const resolution=request.resolution==='720p'?'720p':'1080p';
+        const option=await wait(()=>list('[role="menuitem"]').find(e=>resolution==='720p'?/^720p(?:\s|$)/i.test(text(e)):/^1080p$/i.test(text(e))),'Flow không có lựa chọn tải '+resolution+' cho video này.');
+        if(disabled(option))throw Error('Flow khóa bản '+resolution+' cho video/tài khoản này.');
+        if(/\d+\s*(tín dụng|credits)/i.test(option.innerText))throw Error('Flow yêu cầu tín dụng để tải '+resolution+'; cần bạn xác nhận trong trình duyệt.');
+        tap(option);return {ok:true,data:{requested:true,resolution}};
       }
       if(submenu){const option=await wait(()=>list('[role="menuitem"]').find(e=>/^(Kích thước gốc|Kích thước gốc|Original(?: size)?|1K)$/i.test(text(e))),'Flow chưa cung cấp lựa chọn tải ảnh gốc.');tap(option);}
       return {ok:true,data:{requested:true,resolution:'original'}};
