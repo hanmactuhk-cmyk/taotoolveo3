@@ -41,7 +41,8 @@ class JobRunner {
   }
   runQueue(options = {}) {
     if (this.running) return this.runPromise;
-    const concurrent = Math.min(8, Math.max(1, Number.parseInt(options.concurrent, 10) || 1));
+    const requested = Number(options.concurrent);
+    const concurrent = Number.isSafeInteger(requested) && requested > 0 ? requested : 1;
     this.lastOptions = { ...options, concurrent };
     this.running = true; this.paused = false; this.stopped = false; this.status();
     this.runPromise = this.drain(this.lastOptions); return this.runPromise;

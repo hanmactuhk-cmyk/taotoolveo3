@@ -719,18 +719,14 @@ export default function App() {
               <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Song song</label>
-                  <select
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
                     value={concurrent}
                     onChange={e => setConcurrent(e.target.value)}
                     className="w-full bg-[#131924] border border-[#2B374B] rounded-lg px-2 py-1.5 text-xs text-slate-200"
-                  >
-                    <option value="1">1 luồng</option>
-                    <option value="2">2 luồng</option>
-                    <option value="3">3 luồng</option>
-                    <option value="4">4 luồng</option>
-                    <option value="6">6 luồng</option>
-                    <option value="8">8 luồng</option>
-                  </select>
+                  />
                 </div>
 
                 <div>

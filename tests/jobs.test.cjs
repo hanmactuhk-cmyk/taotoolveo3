@@ -162,6 +162,18 @@ test('remounted tile cannot be counted twice toward x2 results',async()=>{
   await f.runner.monitorJob(page,f.job);assert.equal(polls,3);assert.equal(downloads,2);assert.equal(f.job.Results.length,2);
 });
 
+test('scheduler runs ten or more workers without an eight-job cap',async()=>{
+ for(const concurrent of [10,12]){
+  const f=fixture();f.store.data.Queue=Array.from({length:concurrent+1},(_,i)=>({...f.job,Id:'parallel-'+i,Results:[],Attempts:[]}));
+  let release;const gate=new Promise(resolve=>release=resolve);let active=0,peak=0;
+  f.runner.processJob=async job=>{active++;peak=Math.max(peak,active);job.State='Đang chạy';await gate;job.State='Hoàn tất';active--;};
+  const task=f.runner.runQueue({concurrent});
+  try {await new Promise(resolve=>setTimeout(resolve,20));assert.equal(peak,concurrent);assert.equal(f.runner.workers.size,concurrent);}
+  finally{release();await task;}
+  assert(f.store.data.Queue.every(job=>job.State==='Hoàn tất'));
+ }
+});
+
 test('two automatic parallel jobs use different enabled accounts',async()=>{
  const f=fixture();f.store.data.Accounts.push({...f.account,Id:'account-b',Name:'B'});
  const second={...f.job,Id:'job-second',Results:[],Attempts:[]};f.store.data.Queue.push(second);
