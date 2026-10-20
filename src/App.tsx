@@ -95,7 +95,7 @@ export default function App() {
   const [model, setModel] = useState<string>('Veo 3.1 Fast');
   const [ratio, setRatio] = useState<string>('16:9');
   const [count, setCount] = useState<string>('x1');
-  const [concurrent, setConcurrent] = useState<string>('1');
+  const [concurrent, setConcurrent] = useState<string>('4');
   const [delay, setDelay] = useState<string>('10–20 giây');
   const [mode, setMode] = useState<string>('Văn bản / Khung hình → Video');
   const [selectedAccountId, setSelectedAccountId] = useState<string>('auto');
@@ -722,6 +722,7 @@ export default function App() {
                   <input
                     type="number"
                     min="1"
+                    max="4"
                     step="1"
                     value={concurrent}
                     onChange={e => setConcurrent(e.target.value)}

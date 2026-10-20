@@ -12,6 +12,7 @@ test('account check uses a page client, never BrowserId for DOM commands', async
   const browser = { async connectFlowTab(selected) { assert.equal(selected, account); return client; } };
   let saved = 0; const result = await checkAccount(browser, { save() { saved++; } }, account);
   assert.equal(result.success, true); assert.equal(account.Credits, 40); assert.equal(saved, 1);
+  assert.equal(account.LoginStarted, true); assert.equal(account.LoginMode, false);
   assert.deepEqual(events, ['Page.enable', 'Network.enable', 'dispose']);
 });
 

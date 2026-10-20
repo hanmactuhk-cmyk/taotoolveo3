@@ -33,7 +33,7 @@ class JobRunner {
   pickAccount(job) {
     const eligible = this.store.data.Accounts.filter(account => account.LoginStarted && account.Enabled &&
       (job.Kind === 'image' ? account.Images : account.Videos) && (!job.AccountId || job.AccountId === 'auto' || job.AccountId === account.Id));
-    const load = id => this.store.data.Queue.filter(item => item.AccountId === id && activeStates.has(item.State)).length;
+    const load = id => this.store.data.Queue.filter(item => item.AccountId === id && this.workers.has(item.Id)).length;
     eligible.sort((a,b) => load(a.Id) - load(b.Id) || Number(this.isCoolingDown(a.Id)) - Number(this.isCoolingDown(b.Id)) || (this.accountTurns.get(a.Id) || 0) - (this.accountTurns.get(b.Id) || 0));
     const account = eligible[0];
     if (account) this.accountTurns.set(account.Id, ++this.assignmentSequence);
@@ -42,7 +42,7 @@ class JobRunner {
   runQueue(options = {}) {
     if (this.running) return this.runPromise;
     const requested = Number(options.concurrent);
-    const concurrent = Number.isSafeInteger(requested) && requested > 0 ? requested : 1;
+    const concurrent = Number.isSafeInteger(requested) && requested > 0 ? Math.min(4, requested) : 4;
     this.lastOptions = { ...options, concurrent };
     this.running = true; this.paused = false; this.stopped = false; this.status();
     this.runPromise = this.drain(this.lastOptions); return this.runPromise;

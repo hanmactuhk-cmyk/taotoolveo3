@@ -10,7 +10,7 @@ async function checkAccount(browser, store, account, log = () => {}, updated = (
     await client.call('Network.enable', {});
     const data = await client.bridge({ action: 'account' });
     if (!data || !data.email) throw new Error('Flow chưa trả email.');
-    Object.assign(account, { Email: data.email, Plan: data.plan || 'Unknown', Credits: data.credits,
+    Object.assign(account, { LoginStarted: true, LoginMode: false, Email: data.email, Plan: data.plan || 'Unknown', Credits: data.credits,
       Evidence: data.evidence || '', CheckedUtc: new Date().toISOString() });
     account.Status = account.Plan === 'Unknown' || !Number.isInteger(account.Credits)
       ? 'Đã đọc email; gói/credit chưa rõ' : 'Hoạt động — đã xác minh từ Flow';

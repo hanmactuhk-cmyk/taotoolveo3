@@ -162,16 +162,21 @@ test('remounted tile cannot be counted twice toward x2 results',async()=>{
   await f.runner.monitorJob(page,f.job);assert.equal(polls,3);assert.equal(downloads,2);assert.equal(f.job.Results.length,2);
 });
 
-test('scheduler runs ten or more workers without an eight-job cap',async()=>{
- for(const concurrent of [10,12]){
-  const f=fixture();f.store.data.Queue=Array.from({length:concurrent+1},(_,i)=>({...f.job,Id:'parallel-'+i,Results:[],Attempts:[]}));
-  let release;const gate=new Promise(resolve=>release=resolve);let active=0,peak=0;
-  f.runner.processJob=async job=>{active++;peak=Math.max(peak,active);job.State='Đang chạy';await gate;job.State='Hoàn tất';active--;};
-  const task=f.runner.runQueue({concurrent});
-  try {await new Promise(resolve=>setTimeout(resolve,20));assert.equal(peak,concurrent);assert.equal(f.runner.workers.size,concurrent);}
-  finally{release();await task;}
-  assert(f.store.data.Queue.every(job=>job.State==='Hoàn tất'));
- }
+test('unbounded backlog runs four at once and refills as soon as any job finishes',async()=>{
+ const f=fixture();f.store.data.Accounts=Array.from({length:8},(_,i)=>({...f.account,Id:'account-'+i}));
+ f.store.data.Queue=Array.from({length:25},(_,i)=>({...f.job,Id:'parallel-'+i,Results:[],Attempts:[]}));
+ const releases=new Map(),assigned=[];let active=0,peak=0;
+ f.runner.processJob=async(job,account)=>{job.AccountId=account.Id;job.State='Đang chạy';assigned.push(account.Id);active++;peak=Math.max(peak,active);await new Promise(resolve=>releases.set(job.Id,resolve));active--;job.State='Hoàn tất';};
+ const waitFor=async count=>{const until=Date.now()+1000;while(assigned.length<count&&Date.now()<until)await new Promise(r=>setTimeout(r,1));assert.equal(assigned.length,count);};
+ const task=f.runner.runQueue({concurrent:100});
+ try {
+  await waitFor(4);assert.equal(peak,4);
+  releases.get('parallel-2')();await waitFor(5);
+  assert.equal(f.store.data.Queue[0].State,'Đang chạy');assert.equal(assigned[4],'account-4');
+  for(let next=5;next<25;next++){releases.get('parallel-'+(next-1))();await waitFor(next+1);}
+  assert.equal(new Set(assigned).size,8);assert.equal(peak,4);
+ } finally {f.runner.stop();for(const release of releases.values())release();await task;}
+ assert(f.store.data.Queue.every(job=>job.State==='Hoàn tất'));
 });
 
 test('two automatic parallel jobs use different enabled accounts',async()=>{
